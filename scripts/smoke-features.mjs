@@ -21,7 +21,7 @@ const api=(route,body) => page.evaluate(async ([route,body]) => { const response
 const panel=async name => { await page.locator('[data-view="settings"]').click(); await page.locator(`[data-panel="${name}"]`).click(); await page.locator(`#panel-${name}`).waitFor(); };
 try {
   await start();
-  for (const name of ['general','agent','voice','usage','appearance','sessions','developer','mcp','skills','devices','explore','instances','api','defaults','runtime']) { await panel(name); assert.ok(await page.locator(`#panel-${name} h2`).textContent()); }
+  for (const name of ['general','chat','agent','voice','usage','appearance','sessions','developer','mcp','skills','devices','explore','instances','api','defaults','runtime']) { await panel(name); assert.ok(await page.locator(`#panel-${name} h2`).textContent()); }
   await page.screenshot({ path:path.join(output,'forge-runtime.png') });
   await panel('runtime'); await page.locator('#execution-mode').selectOption('cpu'); await page.getByRole('button',{ name:'Save runtime settings',exact:true }).click();
   await page.waitForFunction(() => document.querySelector('#execution-mode').value==='cpu'); assert.equal((await api('/api/bootstrap')).settings.executionMode,'cpu');
@@ -37,13 +37,13 @@ try {
   await page.locator('#mcp-list').getByRole('button',{ name:'Connect',exact:true }).click(); await page.locator('#mcp-list').getByText('Connected · stdio · 1 tools',{ exact:true }).waitFor();
   await panel('devices'); await page.locator('#device-name').fill('Fixture PC'); await page.locator('#device-base').fill(`http://127.0.0.1:${remote.address().port}/v1`); await page.locator('#device-key').fill('fixture-key'); await page.locator('#device-form button.primary-button').click();
   await page.locator('#device-list').getByRole('button',{ name:'Fetch models',exact:true }).click(); await page.getByRole('button',{ name:'Use fixture-model',exact:true }).click(); await page.locator('#active-model-label').getByText('fixture-model',{ exact:false }).waitFor();
-  const initial=await api('/api/bootstrap'); const created=await api('/api/sessions',{ workspaceId:initial.workspaces[0].id });
-  await api('/api/session/update',{ id:created.id,title:'Persistence check',memory:'A persistent note about this project.' }); await api('/api/session/select',{ workspaceId:created.workspaceId,sessionId:created.id }); await page.reload();
+  const initial=await api('/api/bootstrap'); const created=await api('/api/sessions',{ kind:'chat' });
+  await api('/api/session/update',{ id:created.id,title:'Persistence check',memory:'A persistent note about this project.' }); await api('/api/session/select',{ workspaceId:initial.workspaces[0].id,sessionId:created.id }); await page.reload();
   await page.waitForFunction(() => document.getElementById('page-title').textContent==='Persistence check');
   await panel('sessions'); assert.equal(await page.locator('#session-memory').inputValue(),'A persistent note about this project.');
   await page.getByRole('button',{ name:'Fork current',exact:true }).click(); await page.waitForFunction(() => document.getElementById('page-title').textContent.includes('(fork)'));
   const selected=(await api('/api/bootstrap')).selection.sessionId;
-  await page.locator('#mode').selectOption('chat'); await page.locator('#prompt').fill('Hello, remember my saved notes.'); await page.locator('#send').click();
+  await page.locator('[data-view="chat"]').click(); await page.locator('#prompt').fill('Hello, remember my saved notes.'); await page.locator('#send').click();
   await page.waitForFunction(() => document.querySelectorAll('.message.assistant .message-body').length>0 && document.querySelector('.message.assistant .message-body').textContent.includes('remote fixture') && document.getElementById('stop-task').hidden);
   const chat=JSON.parse(await fs.readFile(path.join(testRoot,'data','sessions','chats',`${selected}.json`),'utf8')); assert.equal(chat.messages.at(-1).content,'Hello from the remote fixture.'); assert.ok(chat.memory.includes('persistent note'));
   await page.screenshot({ path:path.join(output,'forge-workspace.png') });

@@ -1,0 +1,30 @@
+import { _electron as electron } from 'playwright';
+import fs from 'node:fs/promises'; import path from 'node:path'; import http from 'node:http'; import assert from 'node:assert/strict';
+const output=path.resolve('test-artifacts'); const root=await fs.mkdtemp(path.join(output,'chat-tabs-')); const env={...process.env,LOCAL_DESK_TEST_ROOT:root}; delete env.ELECTRON_RUN_AS_NODE;
+const requests=[];
+const server=http.createServer(async(req,res)=>{
+ if(req.url==='/v1/models'){res.setHeader('Content-Type','application/json');res.end(JSON.stringify({data:[{id:'chat-verification'}]}));return;}
+ const chunks=[];for await(const c of req)chunks.push(c); const input=JSON.parse(Buffer.concat(chunks)); requests.push(input);
+ const workspace=Boolean(input.tools?.length); const last=input.messages.at(-1);
+ const delta=workspace && last.role!=='tool' ? {tool_calls:[{index:0,id:'read-welcome',type:'function',function:{name:'read_file',arguments:'{"path":"Welcome.md"}'}}]} : {content:workspace?'Your workspace document is titled Your local workspace.':/capital/i.test(last.content)?'Paris.':'4.'};
+ res.writeHead(200,{'Content-Type':'text/event-stream'}); res.write(`data: ${JSON.stringify({choices:[{delta}]})}\n\n`);res.end(`data: ${JSON.stringify({choices:[{delta:{},finish_reason:delta.tool_calls?'tool_calls':'stop'}]})}\n\ndata: [DONE]\n\n`);
+}); await new Promise(r=>server.listen(0,'127.0.0.1',r));
+let app,page; const errors=[];
+async function launch(){app=await electron.launch({args:['.'],env,timeout:60000});page=await app.firstWindow();page.on('pageerror',e=>errors.push(e.message));await page.waitForFunction(()=>document.getElementById('hardware-label')?.textContent.includes('GB RAM'));}
+const api=(route,body,method=body===undefined?'GET':'POST')=>page.evaluate(async([route,body,method])=>{const r=await fetch(route,{method,headers:{'Content-Type':'application/json','X-Local-Desk-Token':sessionStorage.getItem('local-desk-token')},...(body===undefined?{}:{body:JSON.stringify(body)})});const x=await r.json();if(!r.ok)throw new Error(x.error);return x;},[route,body,method]);
+async function send(text,expected){await page.locator('#prompt').fill(text);await page.locator('#send').click();await page.waitForFunction(expected=>Array.from(document.querySelectorAll('.message.assistant .message-body')).at(-1)?.textContent.includes(expected)&&document.getElementById('stop-task').hidden,expected);if(await page.locator('#task-notice').isVisible())throw new Error(await page.locator('#task-notice').textContent());}
+try {
+ await launch(); assert.ok((await page.locator('[data-view="chat"]').getAttribute('class')).includes('active')); assert.equal(await page.locator('#files-panel').isVisible(),false);
+ await api('/api/settings',{systemPrompt:'WORKSPACE_MARKER: Help with project files.',chatSystemPrompt:'You are a general assistant. Answer everyday questions directly.',contextSize:4096,maxTokens:128},'PATCH');
+ const boot=await api('/api/bootstrap'); const workspaceId=boot.workspaces[0].id;
+ await api('/api/session/import',{workspaceId,document:{format:'forge-chat',session:{kind:'workspace',title:'Project-only history',memory:'WORKSPACE_MARKER',messages:[{role:'user',content:'What is in this project?'},{role:'assistant',content:'There is a file named Welcome.md.'}]}}});
+ const connection=await api('/api/connections',{name:'Fixture',base:`http://127.0.0.1:${server.address().port}/v1`,key:''});await api('/api/connections/use',{id:connection.at(-1).id,model:'chat-verification'});await page.reload();await page.waitForFunction(()=>document.getElementById('send')&&!document.getElementById('prompt').disabled);
+ await send('What is the capital of France?','Paris.'); const first=requests.at(-1); assert.equal(first.tools,undefined);assert.ok(!JSON.stringify(first.messages).includes('Welcome.md'));assert.ok(!JSON.stringify(first.messages).includes('WORKSPACE_MARKER'));
+ await page.locator('[data-view="workspace"]').click();await page.locator('#sessions').getByText('Project-only history',{exact:true}).click();await page.locator('#file-list').getByText('Welcome.md',{exact:true}).waitFor();
+ await send('Read Welcome.md and tell me the heading.','Your local workspace'); assert.ok(requests.some(r=>r.tools?.length&&r.messages.some(m=>m.role==='tool'&&m.content.includes('Your local workspace'))));await page.screenshot({path:path.join(output,'forge-workspace-tab.png')});
+ await page.locator('#prompt').fill('Workspace draft');await page.locator('[data-view="chat"]').click();assert.equal(await page.locator('#files-panel').isVisible(),false);assert.equal(await page.locator('#prompt').inputValue(),'');assert.ok((await page.locator('#messages').textContent()).includes('Paris.'));assert.ok(!(await page.locator('#messages').textContent()).includes('Welcome.md'));
+ await page.locator('#prompt').fill('Chat draft');await page.locator('[data-view="workspace"]').click();await page.waitForFunction(()=>document.getElementById('prompt').value==='Workspace draft');await page.locator('[data-view="chat"]').click();await page.waitForFunction(()=>document.getElementById('prompt').value==='Chat draft');
+ await send('What is 2 + 2?','4.');assert.ok(!JSON.stringify(requests.at(-1).messages).includes('Welcome.md'));assert.ok(!JSON.stringify(requests.at(-1).messages).includes('WORKSPACE_MARKER'));await page.screenshot({path:path.join(output,'forge-normal-chat.png')});
+ await app.close();app=null;await launch();await page.waitForFunction(()=>document.querySelector('.message.assistant .message-body')?.textContent.includes('Paris.'));assert.equal(await page.locator('#files-panel').isVisible(),false);await page.locator('[data-view="workspace"]').click();await page.waitForFunction(()=>document.getElementById('messages').textContent.includes('Your local workspace'));assert.deepEqual(errors,[]);
+ console.log('Chat tabs passed: independent prompts/history/drafts, no workspace context or tools in Chat, real project read in Workspace, and both histories restored after restart.');
+}finally{if(app)await app.close();server.closeAllConnections();await new Promise(r=>server.close(r));}

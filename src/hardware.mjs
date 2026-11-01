@@ -49,10 +49,11 @@ export function memoryPlan(model, settings, device) {
   const gpuLayers = mode === 'cpu' ? 0 : mode === 'gpu' ? totalLayers + 1 : Math.min(settings.gpuLayers, Math.max(1, totalLayers - 1));
   const fraction = Math.min(1, gpuLayers / (totalLayers + 1));
   const weights=model.bytes/GiB; const cache=Math.max(0.3,settings.contextSize/4096*0.55);
-  const layout=model.tensorLayout; const strategy=settings.loadStrategy || 'auto'; const lazy=strategy==='auto' && layout?.lazyBytes>0 && (device.platform || process.platform)!=='win32';
+  const layout=model.tensorLayout; const strategy=settings.loadStrategy || 'auto'; const lazy=strategy!=='mmap' && layout?.lazyBytes>0;
+  const outputOnGpu=gpuLayers>0;
   const offloadedBlocks=layout ? layout.blocks.slice(Math.max(0,layout.blocks.length-Math.max(0,gpuLayers-1))).reduce((n,b) => n+b,0) : 0;
-  const cpuWeights=layout ? (layout.totalBytes-offloadedBlocks-(gpuLayers>0 && !layout.tiedOutput ? layout.outputBytes : 0)-(lazy ? Math.max(0,layout.lazyBytes-256*1024**2) : 0))/GiB : weights*(1-fraction);
-  const gpuWeights=layout ? (offloadedBlocks+(gpuLayers>0 ? layout.outputBytes : 0))/GiB : weights*fraction;
+  const cpuWeights=layout ? (layout.totalBytes-offloadedBlocks-(outputOnGpu && !layout.tiedOutput ? layout.outputBytes : 0)-(lazy ? Math.max(0,layout.lazyBytes-256*1024**2) : 0))/GiB : weights*(1-fraction);
+  const gpuWeights=layout ? (offloadedBlocks+(outputOnGpu ? layout.outputBytes : 0))/GiB : weights*fraction;
   const gpuCache = mode !== 'cpu' && settings.kvOnGpu !== false;
   const adapterGiB=(settings.loraAdapters || []).reduce((sum,a) => sum+(a.bytes || 0),0)/GiB;
   const projectorGiB=(settings.projectorBytes || 0)/GiB;
@@ -61,5 +62,20 @@ export function memoryPlan(model, settings, device) {
   const reserveGiB = settings.reserveRamGiB ?? 2; const errors = [];
   if (device.freeGiB < ramGiB + reserveGiB) errors.push(`Estimated RAM needed ${ramGiB.toFixed(1)} GiB plus ${reserveGiB} GiB reserved for your system; only ${device.freeGiB.toFixed(1)} GiB is currently free. Close other model apps, lower context, or use more GPU layers.`);
   if (device.gpu && vramGiB + 0.5 > device.gpu.freeGiB) errors.push(`Estimated VRAM needed ${vramGiB.toFixed(1)} GiB plus 0.5 GiB desktop headroom; only ${device.gpu.freeGiB.toFixed(1)} GiB is free. Use hybrid with fewer GPU layers or put the KV cache in RAM.`);
-  return { mode,gpuLayers,ramGiB,vramGiB,reserveGiB,estimated:true,strategy:lazy ? 'on-demand embeddings' : strategy==='mmap' ? 'memory map' : 'stream tensors',errors };
+  return { mode,gpuLayers,ramGiB,vramGiB,reserveGiB,estimated:true,strategy:strategy==='mmap' ? 'memory map' : 'stream tensors',lazyEmbeddings:Boolean(lazy),errors };
+}
+
+export function chooseMemoryPlan(model,settings,device) {
+  const manual=memoryPlan(model,settings,device);
+  if (manual.mode!=='hybrid' || settings.autoGpuLayers===false || (!device.gpu && !device.unifiedMemory)) return manual;
+  let best;
+  // Start with the greatest hybrid offload that fits VRAM. Keep the CPU layers,
+  // desktop VRAM margin and the configured RAM reserve in every candidate.
+  for (let layers=Math.max(1,(model.layers || 32)-1);layers>=1;layers--) {
+    const plan=memoryPlan(model,{ ...settings,gpuLayers:layers },device);
+    if (device.gpu && plan.vramGiB+0.5>device.gpu.freeGiB) continue;
+    best ??= plan;
+    if (!plan.errors.length) return { ...plan,autoGpuLayers:true,requestedGpuLayers:settings.gpuLayers };
+  }
+  return { ...(best || manual),autoGpuLayers:true,requestedGpuLayers:settings.gpuLayers };
 }

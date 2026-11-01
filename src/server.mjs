@@ -13,6 +13,7 @@ import { validateSettings } from './settings.mjs';
 import { createFeatures } from './features.mjs';
 import { hardware } from './hardware.mjs';
 import { validateImages } from './images.mjs';
+import { conversationKind,validateSessionPrompt } from './conversations.mjs';
 
 const APP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const contentTypes = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml' };
@@ -98,8 +99,8 @@ export async function createApplication(options = {}) {
           json(res, 200, workspace); return;
         }
         if (route === '/api/sessions' && req.method === 'POST') {
-          const input = await jsonBody(req); workspaceById(input.workspaceId);
-          const session = { id: randomUUID(), workspaceId: input.workspaceId, title: 'New session', messages: [], created: Date.now(), updated: Date.now() };
+          const input = await jsonBody(req); const kind=input.kind ?? 'workspace'; if (!['chat','workspace'].includes(kind)) throw new Error('Choose Chat or Workspace.'); if (kind==='workspace') workspaceById(input.workspaceId);
+          const session = { id: randomUUID(),kind,systemPrompt:validateSessionPrompt(input.systemPrompt), workspaceId:kind==='workspace' ? input.workspaceId : null, title: 'New session', messages: [], created: Date.now(), updated: Date.now() };
           store.state.sessions.unshift(session); await store.save(); json(res, 200, session); return;
         }
         if (route === '/api/session/delete' && req.method === 'POST') {
@@ -130,14 +131,14 @@ export async function createApplication(options = {}) {
           res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive' });
           const emit = event => { if (!res.destroyed) res.write(`data: ${JSON.stringify(event)}\n\n`); };
           const heartbeat = setInterval(() => { if (!res.destroyed) res.write(': heartbeat\n\n'); }, 15000);
-          try { await agent.run({ session,workspace:workspaceById(session.workspaceId),text:input.text.trim(),images,mode:input.mode==='agent' ? 'agent' : 'chat',emit,signal:controller.signal }); }
+          try { const generalChat=conversationKind(session)==='chat'; await agent.run({ session,workspace:generalChat ? null : workspaceById(session.workspaceId),text:input.text.trim(),images,mode:generalChat ? 'chat' : input.mode==='agent' ? 'agent' : 'chat',emit,signal:controller.signal }); }
           catch (error) { emit({ type: 'error', message: error.message }); }
           finally { clearInterval(heartbeat); res.end(); res.off('close', disconnect); }
           return;
         }
         json(res, 404, { error: 'API route not found.' }); return;
       }
-      const staticFiles = { '/':'index.html','/app.js':'app.js','/features.js':'features.js','/styles.css':'styles.css','/features.css':'features.css','/icon.svg':'icon.svg' };
+      const staticFiles = { '/':'index.html','/app.js':'app.js','/features.js':'features.js','/composer.js':'composer.js','/themes.js':'themes.js','/themes.css':'themes.css','/styles.css':'styles.css','/features.css':'features.css','/icon.svg':'icon.svg' };
       if (req.method !== 'GET' || !staticFiles[route]) { json(res, 404, { error: 'Not found.' }); return; }
       const file = path.join(APP_ROOT, 'public', staticFiles[route]);
       res.writeHead(200, { 'Content-Type': contentTypes[path.extname(file)], 'Cache-Control': 'no-store' }); res.end(await fs.readFile(file));

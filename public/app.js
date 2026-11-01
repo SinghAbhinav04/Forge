@@ -3,9 +3,15 @@ const $ = id => document.getElementById(id);
 const node = (tag, className, text) => { const e = document.createElement(tag); if (className) e.className = className; if (text !== undefined) e.textContent = text; return e; };
 const token = location.hash.slice(1) || sessionStorage.getItem('local-desk-token') || '';
 if (token) { sessionStorage.setItem('local-desk-token', token); history.replaceState(null, '', location.pathname); }
-const state={ data:null,workspaceId:null,sessionId:null,view:'workspace',folder:'.',file:null,dirty:false,preview:false,sending:false,installing:false,filesVisible:innerWidth>=1000,images:[] };
+const state={ data:null,workspaceId:null,sessionId:null,view:'chat',scope:'chat',lastSessions:{chat:null,workspace:null},drafts:new Map(),sessionPrompt:null,navVersion:0,loadingSession:null,run:null,notices:new Map(),folder:'.',file:null,dirty:false,preview:false,sending:false,installing:false,filesVisible:innerWidth>=1000,images:[] };
 const welcome = $('welcome');
 const setupHint = $('setup-hint');
+const workspaceIntro=node('div'); while(welcome.firstChild) workspaceIntro.append(welcome.firstChild);
+const chatIntro=node('div'); chatIntro.innerHTML='<div class="eyebrow"><span class="dot"></span> YOUR MODELS. YOUR CONVERSATION.</div><h1>What’s on<br><em>your mind?</em></h1><p>Ask a question, explore an idea, or just talk.<br>Your conversation stays on this computer.</p><div class="suggestions"><button data-prompt="Explain something interesting about the night sky."><span>✧</span><strong>Learn something</strong><small>Follow your curiosity ↗</small></button><button data-prompt="Help me brainstorm a creative weekend project."><span>✎</span><strong>Explore an idea</strong><small>Find a fresh perspective ↗</small></button><button data-prompt="Let’s have a casual conversation."><span>◌</span><strong>Just chat</strong><small>Start a conversation ↗</small></button></div>';
+welcome.append(chatIntro,workspaceIntro,setupHint); $('mode').hidden=true;
+const conversationType=node('span','conversation-type','Chat'); conversationType.id='conversation-type'; $('mode').before(conversationType);
+const generationBanner=node('div','generation-banner');generationBanner.id='generation-banner';generationBanner.hidden=true;const generationLabel=node('span');const viewGeneration=node('button','text-button','View reply');viewGeneration.id='view-generating';const stopGeneration=node('button','text-button','Stop');stopGeneration.id='stop-generating';generationBanner.append(generationLabel,viewGeneration,stopGeneration);document.querySelector('.topbar').after(generationBanner);
+viewGeneration.onclick=()=>{const id=state.run?.current?.id||state.data?.active;if(id)selectSession(id).catch(fail);};stopGeneration.onclick=()=>$('stop-task').click();
 let features;
 let toastTimer;
 function toast(message, error = false) { $('toast').textContent = message; $('toast').classList.toggle('error', error); $('toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('toast').hidden = true; }, error ? 12000 : 4500); }
@@ -16,8 +22,14 @@ async function api(route, { method = 'GET', body } = {}) {
   return response.json();
 }
 const project = () => state.data?.workspaces.find(w => w.id === state.workspaceId);
-const session = () => state.data?.sessions.find(s => s.id === state.sessionId);
-const busy = () => state.sending || Boolean(state.data?.active);
+const session = () => state.run?.current?.id===state.sessionId ? state.run.current : state.data?.sessions.find(s => s.id === state.sessionId);
+const kind = s => s?.kind==='chat' ? 'chat' : 'workspace';
+const busy = () => state.sending || Boolean(state.data?.active) || Boolean(state.data?.runtime?.busy);
+const generatingId=()=>state.run?.current?.id||state.data?.active;
+const visibleRun=()=>Boolean(state.run?.current && state.run.current.id===state.sessionId && ['chat','workspace'].includes(state.view));
+const draftKey=()=>state.sessionId || `new:${state.scope}:${state.scope==='workspace'?state.workspaceId:''}`;
+function saveDraft(){state.drafts.set(draftKey(),{text:$('prompt').value,images:state.images,systemPrompt:state.sessionPrompt});}
+function loadDraft(){const d=state.drafts.get(draftKey());$('prompt').value=d?.text||'';state.images=d?.images||[];state.sessionPrompt=d?d.systemPrompt:session()?.systemPrompt??null;features?.renderImages();}
 const clean = () => !state.dirty || confirm('Discard the unsaved changes in this document?');
 const shortModel = name => name?.replace(/-GGUF$/i, '') || 'No model loaded';
 
@@ -49,36 +61,56 @@ function markdown(text, target) {
   }
 }
 function showView(view) {
+  if (['chat','workspace'].includes(view) && view!==state.scope) { void switchConversation(view).catch(fail); return; }
   state.view = view;
-  for (const name of ['workspace','models','settings','trainer']) $(`${name}-view`).hidden=name!==view;
+  for (const name of ['workspace','models','settings','trainer']) $(`${name}-view`).hidden=name==='workspace' ? !['chat','workspace'].includes(view) : name!==view;
   document.querySelectorAll('[data-view]').forEach(e => e.classList.toggle('active', e.dataset.view === view));
-  $('page-title').textContent=view==='workspace' ? session()?.title || 'New session' : view==='models' ? 'Model library' : view==='trainer' ? 'Trainer' : 'Settings';
+  $('page-title').textContent=['chat','workspace'].includes(view) ? session()?.title || (state.scope==='chat' ? 'New chat' : 'New workspace session') : view==='models' ? 'Model library' : view==='trainer' ? 'Trainer' : 'Settings';
+  $('workspace-view').classList.toggle('chat-mode',state.scope==='chat'); chatIntro.hidden=state.scope!=='chat'; workspaceIntro.hidden=state.scope!=='workspace';
+  $('mode').value=state.scope==='chat' ? 'chat' : 'agent'; conversationType.textContent=state.scope==='chat' ? 'Chat' : 'Workspace agent';
+  $('prompt').placeholder=state.scope==='chat' ? 'Message Forge…' : 'What would you like to work on?';
+  document.querySelector('.composer-caption').firstElementChild.textContent=state.scope==='chat' ? 'Local inference · general conversation' : 'Local inference · writes need your review';
   if (view === 'models') renderModels();
   if (view === 'settings') fillSettings();
   if (state.data) features?.render(state.data);
   $('toggle-files').hidden = view !== 'workspace';
+  renderEditor();
+}
+function setScope(scope) {
+  if(scope===state.scope) return;
+  state.lastSessions[state.scope]=state.sessionId;state.scope=scope;
+}
+async function switchConversation(scope) {
+  saveDraft();state.navVersion++;state.loadingSession=null;const id=state.lastSessions[scope]; setScope(scope); state.sessionId=null;
+  const target=state.data?.sessions.find(s=>s.id===id && kind(s)===scope && (scope==='chat' || s.workspaceId===state.workspaceId));
+  if(target) await selectSession(target.id);
+  else { loadDraft();showView(scope); renderSidebar(); renderMessages(); renderRuntime(); await rememberSelection(); }
+  if(scope==='workspace') await refreshFiles();
 }
 function renderSidebar() {
   $('workspaces').replaceChildren();
   for (const w of state.data.workspaces) {
     const b = node('button', `project-button${w.id === state.workspaceId ? ' active' : ''}`); b.append(node('span', '', '▱'), node('strong', '', w.name)); b.title = w.path;
     if (w.id === state.workspaceId) b.append(node('span', 'project-dot'));
-    b.disabled = busy(); b.onclick = () => switchProject(w.id); $('workspaces').append(b);
+    b.onclick = () => switchProject(w.id); $('workspaces').append(b);
   }
-  const sessions=state.data.sessions.filter(s => s.workspaceId===state.workspaceId && !s.archived).sort((a,b) => b.updated-a.updated);
+  const sessions=state.data.sessions.filter(s => kind(s)===state.scope && (state.scope==='chat' || s.workspaceId===state.workspaceId) && !s.archived).sort((a,b) => b.updated-a.updated);
   $('session-count').textContent = sessions.length || '';
   $('sessions').replaceChildren();
   if (!sessions.length) $('sessions').append(node('div', 'empty-sessions', 'A fresh start.\nYour conversations will appear here.'));
   for (const s of sessions) {
     const row = node('div', `session-row${s.id === state.sessionId ? ' active' : ''}`);
-    const b = node('button'); b.append(node('span', '', '◌'), node('span', 'session-title', s.title)); b.title = s.title; b.disabled = busy();
+    const b = node('button'); b.append(node('span', '', '◌'), node('span', 'session-title', s.title)); b.title = s.title;if(s.id===generatingId())b.append(node('small','session-generating','Generating…'));
     b.onclick=() => selectSession(s.id).catch(fail);
-    const del = node('button', 'delete-session', '×'); del.title = 'Delete session'; del.setAttribute('aria-label', `Delete ${s.title}`); del.disabled = busy();
-    del.onclick = async () => { if (!confirm(`Delete “${s.title}” and its saved conversation? Project files will remain.`)) return; try { await api('/api/session/delete', { method: 'POST', body: { id: s.id } }); state.data.sessions = state.data.sessions.filter(x => x.id !== s.id); if (state.sessionId === s.id) state.sessionId = null; renderSidebar(); renderMessages(); showView(state.view); } catch (error) { fail(error); } };
+    const del = node('button', 'delete-session', '×'); del.title = 'Delete session'; del.setAttribute('aria-label', `Delete ${s.title}`); del.disabled = s.id===generatingId();
+    del.onclick=async()=>{if(!confirm(`Delete “${s.title}” and its saved conversation? Project files will remain.`))return;try{await api('/api/session/delete',{method:'POST',body:{id:s.id}});state.data.sessions=state.data.sessions.filter(x=>x.id!==s.id);state.drafts.delete(s.id);state.notices.delete(s.id);if(state.sessionId===s.id){state.navVersion++;state.sessionId=null;state.drafts.delete(draftKey());loadDraft();await rememberSelection();}renderSidebar();renderMessages();showView(state.view);renderRuntime();}catch(error){fail(error);}};
     row.append(b, del); $('sessions').append(row);
   }
-  $('project-label').textContent = project()?.name || 'Workspace'; $('workspace-path').textContent = project()?.path || ''; $('workspace-path').title = project()?.path || '';
-  $('new-session').disabled = busy(); $('add-workspace').disabled = busy(); $('mode').disabled = busy();
+  $('project-label').textContent = state.scope==='chat' ? 'Chat' : project()?.name || 'Workspace'; $('workspace-path').textContent = project()?.path || ''; $('workspace-path').title = project()?.path || '';
+  $('workspaces').hidden=state.scope==='chat'; $('workspaces').previousElementSibling.hidden=state.scope==='chat';
+  $('session-count').parentElement.firstChild.textContent=state.scope==='chat' ? 'CHATS ' : 'SESSIONS ';
+  $('new-session').childNodes[1].textContent=state.scope==='chat' ? ' New chat ' : ' New session ';
+  $('new-session').disabled=false;$('add-workspace').disabled=false;$('mode').disabled=busy();
 }
 function renderRuntime() {
   const r = state.data.runtime; const isBusy = busy();
@@ -88,10 +120,12 @@ function renderRuntime() {
   $('composer-model').textContent = name;
   $('runtime-dot').className = `dot ${r.status === 'ready' ? '' : r.status === 'loading' ? 'loading' : r.status === 'error' ? 'error' : 'muted'}`;
   $('hardware-label').textContent = `${state.data.hardware.ramGiB.toFixed(0)} GB RAM · ${r.status === 'ready' ? 'Ready' : r.status === 'stopped' ? 'Idle' : r.status}`;
-  $('send').disabled=r.status!=='ready' || isBusy || (!$('prompt').value.trim() && !state.images.length); $('send').hidden=state.sending;
-  $('attach-image').disabled=r.status!=='ready' || isBusy || (!r.vision && r.source!=='remote');
-  $('attach-image').title=r.vision || r.source==='remote' ? 'Attach an image' : 'Load a compatible vision model and its projector first';
-  $('stop-task').hidden = !state.sending; $('prompt').disabled = isBusy && !state.sending;
+  $('send').disabled=r.status!=='ready'||isBusy||Boolean(state.loadingSession)||(!$('prompt').value.trim()&&!state.images.length);$('send').hidden=visibleRun();
+  $('attach-image').disabled=Boolean(state.loadingSession);$('attach-image').title='Attach, paste or drop an image. Vision setup is available if needed.';
+  $('stop-task').hidden=!state.sending&&!state.data.active;$('prompt').disabled=Boolean(state.loadingSession);
+  generationBanner.hidden=!isBusy;const activeTitle=state.run?.current?.title||state.data.sessions.find(s=>s.id===state.data.active)?.title;
+  generationLabel.textContent=activeTitle?`${state.run?.approvals.size?'Waiting for approval':'Generating'} in “${activeTitle}”. You can browse chats and prepare your next message.`:'The model is working. You can browse chats and prepare your next message.';
+  viewGeneration.hidden=!generatingId()||generatingId()===state.sessionId;stopGeneration.hidden=!state.sending&&!state.data.active;features?.renderComposer();
   $('model-count').textContent = state.data.models.length;
   $('runtime-logs').textContent = r.logs?.join('\n') || 'No runtime output yet.';
   $('unload-model').disabled=!r.model || isBusy || r.status==='stopping';
@@ -100,7 +134,7 @@ function renderRuntime() {
   $('install-runtime').hidden=false;
   $('runtime-backend').disabled=$('install-runtime').disabled;
   $('library-runtime-status').textContent = r.status === 'ready' ? 'Model ready' : r.status === 'loading' ? 'Loading your model…' : r.status === 'error' ? 'Runtime needs attention' : state.data.runtimeInstalled ? 'llama.cpp is installed' : 'One quick setup step';
-  $('library-runtime-detail').textContent=r.error || (r.status==='loading' ? `${r.phase || 'Loading'} · ${Math.floor((Date.now()-r.started)/1000)}s · you can cancel loading or keep using the editor.` : state.installing ? 'Downloading the official runtime from GitHub…' : state.data.runtimeInstalled ? `Text inference · ${state.data.executable}` : 'Install a runtime, or choose your own llama-server executable in Settings.');
+  $('library-runtime-detail').textContent=r.error || (r.status==='loading' ? `${r.phase || 'Loading'} · ${Math.floor((Date.now()-r.started)/1000)}s · you can cancel loading or keep using the editor.` : state.installing ? 'Downloading the official runtime from GitHub…' : state.data.runtimeInstalled ? `${r.vision ? 'Vision + text' : 'Text'} inference · ${state.data.executable}` : 'Install a runtime, or choose your own llama-server executable in Settings.');
   $('models-folder').textContent = state.data.modelError || state.data.settings.modelDir;
   const hint = setupHint; hint.replaceChildren();
   if (r.status !== 'ready') { hint.append(document.createTextNode(r.status === 'loading' ? 'Your model is loading. ' : 'Ready when you are. ')); const b = node('button', '', state.data.runtimeInstalled ? 'Choose a local model ↗' : 'Set up local inference ↗'); b.onclick = () => showView('models'); hint.append(b); }
@@ -147,34 +181,42 @@ function renderMessages() {
       const details = node('details', 'tool-event'); details.append(node('summary', '', `✓ ${m.name || 'Tool'} result`), node('pre', '', m.content)); $('messages').append(details);
     } else $('messages').append(messageElement(m));
   }
-  $('page-title').textContent = state.view === 'workspace' ? session()?.title || 'New session' : $('page-title').textContent;
+  if(visibleRun())for(const approval of state.run.approvals.values())approvalCard(approval);
+  if(state.notices.has(state.sessionId))notice(state.notices.get(state.sessionId));
+  $('page-title').textContent = ['chat','workspace'].includes(state.view) ? session()?.title || (state.scope==='chat' ? 'New chat' : 'New workspace session') : $('page-title').textContent;
   scrollToBottom();
 }
 function scrollToBottom() { $('messages').scrollTop = $('messages').scrollHeight; }
 function notice(message) { $('task-notice').textContent = message; $('task-notice').hidden = false; }
 async function newSession() {
-  if (busy()) return;
-  state.sessionId = null; showView('workspace'); renderSidebar(); renderMessages(); $('prompt').focus();
+  saveDraft();state.navVersion++;state.loadingSession=null;state.sessionId=null;state.drafts.delete(draftKey());loadDraft();state.lastSessions[state.scope]=null;showView(state.scope);renderSidebar();renderMessages();renderRuntime();$('prompt').focus();
   await rememberSelection();
 }
-async function rememberSelection() { try { await api('/api/session/select',{ method:'POST',body:{ workspaceId:state.workspaceId,sessionId:state.sessionId } }); } catch (error) { fail(error); } }
+async function rememberSelection() { const ticket=state.navVersion;const values={workspaceId:state.workspaceId,sessionId:state.sessionId,view:state.scope};try { state.lastSessions[state.scope]=state.sessionId;const selected=await api('/api/session/select',{method:'POST',body:values});if(ticket===state.navVersion)state.data.selection=selected; } catch(error){fail(error);} }
 async function selectSession(id) {
-  if (busy()) return;
-  const selected=await api(`/api/session?id=${encodeURIComponent(id)}`);
-  if (state.workspaceId!==selected.workspaceId) { if (!clean()) return; state.workspaceId=selected.workspaceId; state.file=null; state.dirty=false; state.folder='.'; renderEditor(); await refreshFiles(); }
+  saveDraft();const ticket=++state.navVersion;state.loadingSession=id;renderRuntime();
+  try{const selected=state.run?.current?.id===id?state.run.current:await api(`/api/session?id=${encodeURIComponent(id)}`);if(ticket!==state.navVersion)return;saveDraft();
+  if (kind(selected)==='workspace' && state.workspaceId!==selected.workspaceId && !clean()) return;
+  setScope(kind(selected));
+  if (kind(selected)==='workspace' && state.workspaceId!==selected.workspaceId) { state.workspaceId=selected.workspaceId; state.file=null; state.dirty=false; state.folder='.'; renderEditor(); await refreshFiles(); }
   const index=state.data.sessions.findIndex(s => s.id===id); if (index<0) state.data.sessions.unshift(selected); else state.data.sessions[index]=selected;
-  state.sessionId=id; showView('workspace'); renderSidebar(); renderMessages(); renderRuntime(); await rememberSelection();
+  state.sessionId=id;loadDraft();showView(state.scope);renderSidebar();renderMessages();renderRuntime();await rememberSelection();
+  }finally{if(ticket===state.navVersion){state.loadingSession=null;renderRuntime();}}
 }
 async function switchProject(id) {
-  if (busy() || !clean()) return;
+  if (!clean()) return;saveDraft();state.navVersion++;state.loadingSession=null;
+  setScope('workspace');
   state.workspaceId = id; state.sessionId = null; state.folder = '.'; state.file = null; state.dirty = false;
+  loadDraft();
   renderSidebar(); renderMessages(); renderEditor(); showView('workspace'); await refreshFiles();
   await rememberSelection();
 }
 async function refreshFiles() {
-  if (!project()) return;
+  if (!project() || state.scope!=='workspace') return;
   try {
+    const workspaceId=state.workspaceId;const folder=state.folder;
     const entries = await api(`/api/files?workspaceId=${encodeURIComponent(state.workspaceId)}&path=${encodeURIComponent(state.folder)}`);
+    if(state.workspaceId!==workspaceId||state.folder!==folder||state.scope!=='workspace')return;
     $('folder-breadcrumb').replaceChildren();
     const root = node('button', '', '▱ Project'); root.onclick = () => { state.folder = '.'; refreshFiles(); }; $('folder-breadcrumb').append(root);
     if (state.folder !== '.') { const up = node('button', '', '↑'); up.title = 'Parent folder'; up.onclick = () => { state.folder = state.folder.split('/').slice(0, -1).join('/') || '.'; refreshFiles(); }; $('folder-breadcrumb').append(node('span', '', '/'), node('span', '', state.folder), up); }
@@ -198,7 +240,7 @@ function renderEditor() {
   $('preview-toggle').textContent = state.preview ? 'Edit' : 'Preview';
   $('editor-status').textContent=f?.readOnly ? 'Extracted document text · read only' : f ? state.dirty ? 'Unsaved changes' : f.hash ? 'Saved on this device' : 'New document' : 'Markdown · text · code';
   if (f) { if ($('editor').value !== f.content) $('editor').value = f.content; if (state.preview) markdown(f.content, $('document-preview')); }
-  $('files-panel').hidden = !state.filesVisible;
+  $('files-panel').hidden = state.scope!=='workspace' || !state.filesVisible;
 }
 async function saveFile() {
   if (!state.file || !state.dirty || state.file.readOnly) return;
@@ -209,22 +251,24 @@ function fillSettings() { for (const key of settingKeys) $(`setting-${key}`).val
 async function refresh() {
   const previous = state.data;
   state.data = await api('/api/bootstrap');
-  if (!previous && state.data.settings.restoreSession && state.data.selection?.workspaceId) { state.workspaceId=state.data.selection.workspaceId; state.sessionId=state.data.selection.sessionId; }
+  if(state.run?.current){const index=state.data.sessions.findIndex(s=>s.id===state.run.current.id);if(index>=0)state.data.sessions[index]=state.run.current;}
+  if (!previous && state.data.settings.restoreSession) { const selection=state.data.selection || {}; state.workspaceId=selection.workspaceId; state.scope=selection.view==='workspace' ? 'workspace' : 'chat'; state.view=state.scope; state.lastSessions={chat:selection.chatSessionId || null,workspace:selection.workspaceSessionId || (selection.view!=='chat' ? selection.sessionId : null)}; state.sessionId=state.lastSessions[state.scope]; }
   if (!state.workspaceId || !project()) state.workspaceId = state.data.workspaces[0]?.id;
-  if (state.sessionId && !session()) state.sessionId = null;
-  if (state.sessionId) { const full=await api(`/api/session?id=${encodeURIComponent(state.sessionId)}`); const index=state.data.sessions.findIndex(s => s.id===state.sessionId); state.data.sessions[index]=full; }
+  if (state.sessionId && (!session() || kind(session())!==state.scope)) state.sessionId = null;
+  if(state.sessionId&&state.sessionId!==state.run?.current?.id){const id=state.sessionId;const ticket=state.navVersion;const full=await api(`/api/session?id=${encodeURIComponent(id)}`);if(id===state.sessionId&&ticket===state.navVersion){const index=state.data.sessions.findIndex(s=>s.id===id);if(index>=0)state.data.sessions[index]=full;}}
   renderSidebar(); renderRuntime();
-  if (!previous) { renderMessages(); renderEditor(); await refreshFiles(); }
+  if (!previous) { loadDraft();showView(state.scope); renderMessages(); renderEditor(); await refreshFiles(); }
   features?.render(state.data);
 }
 function approvalCard(event) {
+  const pendingRun=state.run;
   const card=node('div','approval'); card.append(node('div','approval-title',`${event.kind==='mcp' ? 'Review external MCP tool call' : event.exists ? 'Review file replacement' : 'Review new document'} · ${event.path}`),node('p','',event.description || 'The agent is waiting. Applying this proposal writes the following content to your project.'));
   const columns = node('div', 'proposal-columns');
   for (const [label, value] of [['Before', event.before || '(new file)'], ['After', event.after]]) { const col = node('div', 'proposal-column'); col.append(node('span', '', label), node('pre', '', value)); columns.append(col); }
   const actions=node('div','approval-actions'); const yes=node('button','primary-button',event.kind==='mcp' ? 'Run external tool' : 'Apply write'); const no=node('button','secondary-button','Decline');
   for (const [button, accept] of [[yes, true], [no, false]]) button.onclick = async () => {
     yes.disabled = true; no.disabled = true;
-    try { await api('/api/approval', { method: 'POST', body: { id: event.id, accept } }); actions.append(node('span', '', accept ? 'Approved · waiting for save result' : 'Declined')); }
+    try { await api('/api/approval', { method: 'POST', body: { id: event.id, accept } });pendingRun?.approvals.delete(event.id);renderRuntime(); actions.append(node('span', '', accept ? 'Approved · waiting for save result' : 'Declined')); }
     catch (error) { fail(error); actions.append(node('span', '', 'Proposal is no longer active.')); }
   };
   actions.append(yes, no); card.append(columns, actions); $('messages').append(card); scrollToBottom();
@@ -238,20 +282,32 @@ async function* events(body) {
 }
 async function send(event) {
   event.preventDefault(); const text=$('prompt').value.trim() || (state.images.length ? 'Describe the attached image.' : '');
-  if (!text || busy()) return;
+  if(!text||state.loadingSession)return;if(busy()){toast('The model is generating another reply. You can prepare this message and send it when that reply finishes.');return;}
+  if((state.images.length||session()?.messages?.some(m=>m.images?.length))&&!state.data.runtime.vision&&state.data.runtime.source!=='remote'){await features.visionSetup();return;}
   if (state.data.runtime.status !== 'ready') { toast('Load a model in the Models tab first.', true); showView('models'); return; }
-  const mode = $('mode').value; state.sending = true; $('task-notice').hidden = true; showView('workspace');
+  const scope=state.scope;const workspaceId=state.workspaceId;const originTicket=state.navVersion;const images=state.images;const systemPrompt=state.sessionPrompt;const mode=scope==='chat'?'chat':'agent';
+  const run={current:session()||null,originTicket,approvals:new Map(),notice:'',controller:new AbortController(),accepted:false};state.run=run;
+  state.sending=true;$('task-notice').hidden=true;$('prompt').value='';state.images=[];saveDraft();features.renderImages();showView(state.scope);
   renderSidebar(); renderRuntime();
-  let current;
+  let current=run.current;
   try {
-    if (!session()) { const created = await api('/api/sessions', { method: 'POST', body: { workspaceId: state.workspaceId } }); state.data.sessions.unshift(created); state.sessionId = created.id; }
-    current = session();
-    await rememberSelection();
-    const response=await fetch('/api/chat',{ method:'POST',headers:{ 'Content-Type':'application/json','X-Local-Desk-Token':token },body:JSON.stringify({ sessionId:current.id,text,mode,images:state.images }) });
+    if(!current){current=await api('/api/sessions',{method:'POST',body:{kind:scope,workspaceId:scope==='workspace'?workspaceId:null,systemPrompt}});run.current=current;state.data.sessions.unshift(current);if(originTicket===state.navVersion){state.sessionId=current.id;saveDraft();}}
+    state.notices.delete(current.id);if(originTicket===state.navVersion)await rememberSelection();renderSidebar();renderRuntime();
+    const response=await fetch('/api/chat',{ method:'POST',headers:{ 'Content-Type':'application/json','X-Local-Desk-Token':token },body:JSON.stringify({ sessionId:current.id,text,mode,images }),signal:run.controller.signal });
     if (!response.ok) { const data = await response.json(); throw new Error(data.error); }
-    $('prompt').value = '';
-    state.images=[]; features.renderImages();
+    run.accepted=true;
     for await (const event of events(response.body)) {
+      if(event.type==='approval')run.approvals.set(event.id,event);
+      if(event.type==='notice'||event.type==='error'){run.notice=event.message;state.notices.set(current.id,event.message);}
+      if(event.type==='tool'){const last=current.messages.at(-1);if(last?.role==='assistant'){last.tool_calls??=[];last.tool_calls.push({function:{name:event.name,arguments:event.arguments}});}}
+      if(!visibleRun()){
+        if(event.type==='session')Object.assign(current,event.session);
+        else if(event.type==='message'||event.type==='tool_result')current.messages.push(event.message);
+        else if(event.type==='delta'||event.type==='reasoning'){const m=current.messages.find(m=>m.id===event.id);if(m){if(event.type==='delta')m.content+=event.content;else m.reasoning=(m.reasoning||'')+event.content;}}
+        else if(event.type==='metrics'){const m=current.messages.find(m=>m.id===event.id);if(m)m.metrics=event.metrics;}
+        if(['session','approval','done','error'].includes(event.type)){renderSidebar();renderRuntime();}
+        continue;
+      }
       const nearBottom = $('messages').scrollHeight - $('messages').scrollTop - $('messages').clientHeight < 160;
       if (event.type === 'session') { Object.assign(current, event.session); renderSidebar(); renderMessages(); }
       else if (event.type === 'message') { current.messages.push(event.message); $('messages').append(messageElement(event.message, true)); }
@@ -274,14 +330,13 @@ async function send(event) {
       else if (event.type === 'usage') $('composer-model').textContent = `${shortModel(state.data.runtime.model?.name)} · ${event.usage.completion_tokens ?? '?'} output tokens`;
       if (nearBottom || ['message', 'approval'].includes(event.type)) scrollToBottom();
     }
-  } catch (error) { fail(error); notice(error.message); }
+  } catch(error){const message=error.name==='AbortError'?'Task stopped.':error.message;run.notice=message;if(current)state.notices.set(current.id,message);if(visibleRun()){fail(message);notice(message);}else toast(message,true);if(!run.accepted&&current){state.drafts.set(current.id,{text,images,systemPrompt});if(state.sessionId===current.id)loadDraft();}}
   finally {
-    state.sending = false;
+    const wasVisible=visibleRun();state.sending=false;if(state.run===run)state.run=null;
     try { await refresh();
-      // Replace streaming text with formatted Markdown without removing the final status.
-      const status = $('task-notice').hidden ? null : $('task-notice').textContent; renderMessages(); if (status) notice(status);
+      renderMessages();if(!wasVisible&&current&&!run.notice)toast(`Reply finished in “${current.title}”.`);
     } catch (error) { fail(error); }
-    renderSidebar(); renderRuntime(); refreshFiles(); $('prompt').focus();
+    renderSidebar();renderRuntime();refreshFiles();if(wasVisible)$('prompt').focus();
   }
 }
 
@@ -296,7 +351,7 @@ document.querySelectorAll('[data-prompt]').forEach(e => { e.onclick = () => { $(
 $('new-session').onclick = newSession; $('chat-form').onsubmit = send;
 $('prompt').oninput = () => { $('prompt').style.height = 'auto'; $('prompt').style.height = `${Math.min(220, $('prompt').scrollHeight)}px`; renderRuntime(); };
 $('prompt').onkeydown=e => { if (e.key==='Enter' && !e.shiftKey && !e.isComposing && state.data?.settings.enterToSend!==false) { e.preventDefault(); $('chat-form').requestSubmit(); } };
-$('stop-task').onclick = async () => { try { await api('/api/stop', { method: 'POST', body: {} }); notice('Stopping task…'); } catch (error) { fail(error); } };
+$('stop-task').onclick = async () => { try {state.run?.controller.abort();await api('/api/stop',{method:'POST',body:{}});toast('Stopping the current response…');} catch(error){fail(error);} };
 $('model-shortcut').onclick = $('runtime-shortcut').onclick = () => showView('models');
 $('toggle-files').onclick = () => { state.filesVisible = !state.filesVisible; renderEditor(); };
 $('refresh-files').onclick = refreshFiles;
@@ -338,7 +393,7 @@ $('install-runtime').onclick = async () => {
 };
 document.addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'n') { e.preventDefault(); newSession(); } if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); saveFile(); } });
 window.addEventListener('beforeunload', e => { if (state.dirty || state.sending) { e.preventDefault(); e.returnValue = ''; } });
-features=initFeatures({ state,api,refresh,showView,session,busy,toast,fail,askPath,selectSession,newSession,token,renderRuntime });
+features=initFeatures({ state,api,refresh,showView,session,busy,toast,fail,askPath,selectSession,newSession,token,renderRuntime,saveDraft });
 await refresh().catch(error => { fail(error); notice(`Could not connect: ${error.message}`); });
 setInterval(async () => {
   if (!state.data) return;

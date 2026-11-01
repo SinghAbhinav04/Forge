@@ -3,6 +3,7 @@ import path from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import os from 'node:os';
 import { atomicJson as atomic,readJson } from './storage.mjs';
+import { DEFAULT_CHAT_PROMPT,conversationKind } from './conversations.mjs';
 
 const defaults = root => ({ modelDir: path.resolve(root, '../models'), runtimePath: '', contextSize: 2048, gpuLayers: 8, threads: Math.max(1, Math.min(2, os.availableParallelism() - 2)), temperature: 0.7, maxTokens: 768, systemPrompt: 'You are a helpful local assistant. Be clear, accurate, and honest about limitations.', executionMode:'hybrid', performanceMode:'responsive', batchSize:128, microBatchSize:64, reserveRamGiB:2, kvOnGpu:false, theme:'dark', fontSize:13, enterToSend:true, restoreSession:true, renameAfterFork:true, maxAgentSteps:12, allowReadTools:true, allowWriteTools:true, showReasoning:true, thinking:'auto', runInBackground:true, voiceRuntimePath:'', voiceModelPath:'', voiceLanguage:'en', apiHost:'127.0.0.1', apiPort:12345 });
 export const sessionSummary = s => { const { messages, ...meta } = s; return { ...meta, messageCount: messages?.length || 0 }; };
@@ -18,7 +19,7 @@ export async function openStore(appRoot, dataDir = path.join(appRoot, '.data'), 
     if (workspaceDir) { try { await fs.copyFile(path.join(appRoot,'workspace','Welcome.md'), path.join(workspace,'Welcome.md'), (await import('node:fs')).constants.COPYFILE_EXCL); } catch (e) { if (!['EEXIST','ENOENT'].includes(e.code)) throw e; } }
     state = { version:2, settings:{ ...defaults(appRoot), ...(defaultModelDir ? { modelDir:defaultModelDir } : {}) }, workspaces:[{ id:randomUUID(), name:'My workspace', path:workspace }], sessions:[] };
   }
-  const old = state.settings || {}; state.settings = { ...defaults(appRoot), ...old };
+  const old = state.settings || {}; state.settings = { autoGpuLayers:true,chatSystemPrompt:DEFAULT_CHAT_PROMPT,...defaults(appRoot), ...old };
   if (!old.performanceMode) { state.settings.threads = Math.min(2,state.settings.threads); state.settings.kvOnGpu = false; state.settings.executionMode = old.gpuLayers > 0 ? 'hybrid' : 'cpu'; }
   state.settings.sessionDir ||= path.join(dataDir,'sessions','chats');
   state.usage ||= []; state.skills ||= []; state.mcpServers ||= []; state.connections ||= []; state.modelDefaults ||= {}; state.selection ||= {};
@@ -32,6 +33,7 @@ export async function openStore(appRoot, dataDir = path.join(appRoot, '.data'), 
     }
     state.sessions = loaded;
   }
+  for (const session of state.sessions || []) session.kind=conversationKind(session);
   const revisions = new Map(); let queue = Promise.resolve();
   const save = () => {
     const chatDir = state.settings.sessionDir;

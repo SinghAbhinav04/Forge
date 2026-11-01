@@ -5,7 +5,7 @@ import { spawn,execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import os from 'node:os';
-import { hardware, ggufMetadata, memoryPlan } from './hardware.mjs';
+import { hardware, ggufMetadata, chooseMemoryPlan } from './hardware.mjs';
 
 export async function scanModels(directory) {
   const models = [];
@@ -72,10 +72,12 @@ export class Runtime {
     let projectorBytes=0; if (settings.projectorPath) { if (!path.isAbsolute(settings.projectorPath) || !/\.gguf$/i.test(settings.projectorPath)) throw new Error('Select an absolute path to a matching GGUF vision projector.'); const projector=await fs.open(settings.projectorPath,'r'); try { const magic=Buffer.alloc(4); await projector.read(magic,0,4,0); if (magic.toString()!=='GGUF') throw new Error('Projector is not GGUF.'); projectorBytes=(await projector.stat()).size; } finally { await projector.close(); } }
     this.configuration={ contextSize:settings.contextSize,imageTokens:settings.imageTokens || 1120,projectorPath:settings.projectorPath || '',vision:Boolean(settings.projectorPath) };
     this.sampling=Object.fromEntries(['temperature','maxTokens','topP','topK','minP','repeatPenalty','seed'].filter(key => settings[key]!==undefined).map(key => [key,settings[key]]));
-    this.plan=memoryPlan(model,{ ...settings,projectorBytes },await hardware({ fresh:true }));
+    this.plan=chooseMemoryPlan(model,{ ...settings,projectorBytes },await hardware({ fresh:true }));
     if (this.plan.errors.length) throw new Error(this.plan.errors.join('\n'));
     this.status = 'loading'; this.error = ''; this.logs = []; this.model = model;
     this.started=Date.now(); this.phase='Starting inference process'; this.offloadEvidence=[];
+    if (this.plan.autoGpuLayers) this.log(`Automatic hybrid placement: ${this.plan.gpuLayers} GPU layers; ${this.plan.reserveGiB} GiB system RAM reserve preserved.`);
+    if (this.plan.lazyEmbeddings) this.log('Large embedding tables use on-demand reads; other weights use streamed loading.');
     this.port = await availablePort(); this.key = randomBytes(32).toString('hex');
     const mode = this.plan.mode;
     const threads = settings.performanceMode === 'responsive' ? Math.min(settings.threads,Math.max(1,Math.floor(os.availableParallelism()/3))) : settings.threads;
@@ -88,7 +90,7 @@ export class Runtime {
     args.push('--log-verbosity','4');
     if (settings.performanceMode==='responsive') args.push('--no-repack');
     args.push('--load-mode',this.plan.strategy==='stream tensors' ? 'none' : 'mmap');
-    if (this.plan.strategy==='on-demand embeddings') args.push('--lazy-mode','on');
+    if (this.plan.lazyEmbeddings) args.push('--lazy-mode','on');
     this.loadedAdapters=settings.loraAdapters || [];
     for (const adapter of this.loadedAdapters) args.push('--lora',adapter.path);
     if (this.loadedAdapters.length) args.push('--lora-init-without-apply');

@@ -10,10 +10,12 @@ import { createApplication } from '../src/server.mjs';
 import { McpManager,endpoint,remoteModels } from '../src/integrations.mjs';
 import { LocalApi } from '../src/local-api.mjs';
 import { Runtime } from '../src/runtime.mjs';
-import { memoryPlan } from '../src/hardware.mjs';
+import { memoryPlan,chooseMemoryPlan } from '../src/hardware.mjs';
 import { validateSettings } from '../src/settings.mjs';
 import { Downloads,searchModels } from '../src/hub.mjs';
 import { atomicJson } from '../src/storage.mjs';
+import { findProjectors } from '../src/vision.mjs';
+import { THEMES } from '../public/themes.js';
 async function temp(t) { const dir=await fs.mkdtemp(path.join(os.tmpdir(),'forge-test-')); const cleanup=[]; t.after(async () => { for (const task of cleanup) await task(); await fs.rm(dir,{ recursive:true,force:true }); }); return { dir,cleanup }; }
 const sleep=ms => new Promise(r => setTimeout(r,ms));
 async function wait(predicate) { const end=Date.now()+5000; while (!await predicate()) { if (Date.now()>end) throw new Error('Timed out'); await sleep(10); } }
@@ -65,6 +67,15 @@ test('advanced sampling and resource settings reject invalid values',async t => 
   assert.equal(validateSettings({ topP:.9,executionMode:'gpu',runInBackground:false },current).topP,.9);
   for (const input of [{ topP:2 },{ minP:-1 },{ seed:1.5 },{ microBatchSize:512,batchSize:16 },{ executionMode:'magic' },{ reserveRamGiB:0 },{ runInBackground:'yes' }]) assert.throws(() => validateSettings(input,current));
 });
+
+test('hybrid placement uses on-demand embeddings and available VRAM without reducing the RAM reserve',() => {
+  const GiB=1024**3; const model={ bytes:5.4*GiB,layers:42,tensorLayout:{ totalBytes:5.4*GiB,blocks:Array(42).fill(.066*GiB),lazyBytes:2.15*GiB,outputBytes:.5*GiB,tiedOutput:true } };
+  const device={ platform:'win32',freeGiB:4.2,gpu:{ freeGiB:4.2 } }; const settings={ executionMode:'hybrid',gpuLayers:8,contextSize:2048,kvOnGpu:false,reserveRamGiB:2,loadStrategy:'stream' };
+  const manual=chooseMemoryPlan(model,{ ...settings,autoGpuLayers:false },device); assert.ok(manual.errors.length); assert.equal(manual.gpuLayers,8);
+  const auto=chooseMemoryPlan(model,settings,device); assert.equal(auto.gpuLayers,41); assert.equal(auto.reserveGiB,2); assert.deepEqual(auto.errors,[]); assert.equal(auto.lazyEmbeddings,true); assert.equal(auto.strategy,'stream tensors');
+  const mapped=memoryPlan(model,{ ...settings,gpuLayers:41,loadStrategy:'mmap' },device); assert.equal(mapped.lazyEmbeddings,false); assert.ok(mapped.ramGiB>auto.ramGiB+1.8);
+  const low=chooseMemoryPlan(model,settings,{ ...device,freeGiB:2.5,gpu:{ freeGiB:1 } }); assert.ok(low.errors.length); assert.equal(low.reserveGiB,2);
+});
 test('MCP connects a real stdio server, discovers tools, invokes them and disconnects',async t => {
   const manager=new McpManager(); t.after(() => manager.close()); await manager.connect({ id:'server',name:'Fixture',transport:'stdio',command:process.execPath,args:[path.resolve('test/mcp-fixture.mjs')] });
   const tool=manager.definitions()[0]; assert.ok(tool.function.name.startsWith('mcp_')); const result=await manager.call(tool.function.name,{ text:'hello' }); assert.equal(result.content[0].text,'echo:hello'); await manager.disconnect('server'); assert.equal(manager.definitions().length,0);
@@ -91,6 +102,38 @@ test('settings features support archive/fork/import, skills, device secrets and 
   const exported=await request(`/api/session/export?id=${s.id}`); const imported=await request('/api/session/import',{ workspaceId:initial.workspaces[0].id,document:JSON.parse(exported.content) }); assert.notEqual(imported.id,s.id);
   await request('/api/skills',{ name:'Concise',instructions:'Use concise prose.',enabled:true }); await request('/api/connections',{ name:'Other PC',base:'http://127.0.0.1:45678/v1',key:'do-not-return' });
   const final=await request('/api/bootstrap'); assert.equal(final.skills[0].enabled,true); assert.equal(final.connections[0].key,undefined); assert.equal(final.apiKey,undefined); assert.ok(!JSON.stringify(final).includes('do-not-return')); assert.equal(final.sessions[0].messages,undefined);
+});
+
+test('normal chats persist independently of project sessions, including selection, fork and export/import',async t => {
+  const { dir,cleanup }=await temp(t); const app=await createApplication({appRoot:dir}); cleanup.push(()=>app.close());
+  const request=async(route,body,status=200)=>{const r=await fetch(app.origin+route,{method:body===undefined?'GET':'POST',headers:{'X-Local-Desk-Token':app.token,'Content-Type':'application/json'},...(body===undefined?{}:{body:JSON.stringify(body)})});const result=await r.json();assert.equal(r.status,status,JSON.stringify(result));return result;};
+  const workspaceId=app.store.state.workspaces[0].id;
+  const workspace=await request('/api/sessions',{workspaceId}); assert.equal(workspace.kind,'workspace');
+  const chat=await request('/api/sessions',{kind:'chat'}); assert.equal(chat.kind,'chat'); assert.equal(chat.workspaceId,null);
+  await request('/api/session/select',{workspaceId,sessionId:workspace.id,view:'workspace'});
+  await request('/api/session/select',{workspaceId,sessionId:chat.id,view:'chat'});
+  await request('/api/session/select',{workspaceId,sessionId:workspace.id,view:'chat'},400);
+  const state=(await request('/api/bootstrap')); assert.equal(state.selection.chatSessionId,chat.id); assert.equal(state.selection.workspaceSessionId,workspace.id);
+  const fork=await request('/api/session/fork',{id:chat.id}); assert.equal(fork.kind,'chat'); assert.equal(fork.workspaceId,null);
+  const exported=await request(`/api/session/export?id=${chat.id}`); const imported=await request('/api/session/import',{document:JSON.parse(exported.content)}); assert.equal(imported.kind,'chat'); assert.equal(imported.workspaceId,null);
+  const store=await openStore(dir); assert.equal(store.state.sessions.find(s=>s.id===workspace.id).kind,'workspace'); assert.equal(store.state.sessions.find(s=>s.id===chat.id).kind,'chat'); assert.equal(store.state.selection.chatSessionId,chat.id);
+});
+
+test('per-chat prompts save during another active response and survive export/import and restart',async t=>{
+ const {dir,cleanup}=await temp(t);const app=await createApplication({appRoot:dir});cleanup.push(()=>app.close());
+ const request=async(route,body)=>{const r=await fetch(app.origin+route,{method:body===undefined?'GET':'POST',headers:{'Content-Type':'application/json','X-Local-Desk-Token':app.token},...(body===undefined?{}:{body:JSON.stringify(body)})});return {status:r.status,data:await r.json()};};
+ const first=(await request('/api/sessions',{kind:'chat',systemPrompt:'First chat instructions.'})).data;const second=(await request('/api/sessions',{kind:'chat'})).data;
+ app.agent.active={sessionId:first.id,controller:new AbortController()};const updated=await request('/api/session/prompt',{id:second.id,systemPrompt:'Second chat instructions.'});assert.equal(updated.status,200);assert.equal(app.store.state.sessions.find(s=>s.id===first.id).systemPrompt,'First chat instructions.');app.agent.active=null;
+ assert.equal((await request('/api/session/prompt',{id:second.id,systemPrompt:42})).status,400);
+ const document=JSON.parse((await request('/api/session/export?id='+second.id)).data.content);const imported=(await request('/api/session/import',{document})).data;assert.equal(imported.systemPrompt,'Second chat instructions.');
+ const store=await openStore(dir);assert.equal(store.state.sessions.find(s=>s.id===second.id).systemPrompt,'Second chat instructions.');
+ for(const theme of THEMES)assert.equal(validateSettings({theme:theme.id},store.state.settings).theme,theme.id);
+});
+
+test('vision discovery finds local projectors without following linked folders',async t=>{
+ const {dir}=await temp(t);await fs.writeFile(path.join(dir,'model.gguf'),'GGUF');await fs.writeFile(path.join(dir,'mmproj-model-q4.gguf'),'GGUF');await fs.mkdir(path.join(dir,'nested'));await fs.writeFile(path.join(dir,'nested','model-projector.gguf'),'GGUF22');
+ const outside=await fs.mkdtemp(path.join(os.tmpdir(),'forge-projector-outside-'));t.after(()=>fs.rm(outside,{recursive:true,force:true}));await fs.writeFile(path.join(outside,'mmproj-secret.gguf'),'GGUF');await fs.symlink(outside,path.join(dir,'linked'),process.platform==='win32'?'junction':'dir');
+ assert.deepEqual((await findProjectors(dir)).map(f=>f.name),['mmproj-model-q4.gguf','model-projector.gguf']);
 });
 test('model downloads pause, resume with Range, and verify the final GGUF checksum',async t => {
   const { dir,cleanup }=await temp(t); const store=await openStore(dir); store.state.settings.modelDir=dir; const data=Buffer.alloc(128*1024,4); data.write('GGUF'); const sha=createHash('sha256').update(data).digest('hex');

@@ -15,6 +15,7 @@ const app = await electron.launch({ executablePath: executable, args: [`--user-d
 try {
   const page = await app.firstWindow(); const errors = []; page.on('pageerror', error => errors.push(error.message));
   await page.waitForFunction(() => document.getElementById('hardware-label')?.textContent.includes('GB RAM'));
+  await page.locator('[data-view="workspace"]').click();
   await page.locator('#file-list .file-row').filter({ hasText: 'Welcome.md' }).click();
   await page.waitForFunction(() => document.getElementById('editor').value.includes('Your local workspace'));
   await page.locator('[data-view="settings"]').click();

@@ -1,25 +1,17 @@
-Forge 0.2.3 is a local desktop AI workspace for Windows, macOS, and Linux.
+Forge 0.2.4 adds a separate normal Chat experience and fixes model loading and conversation controls.
 
-This update fixes the Library's Change folder button so it opens the native picker directly, validates folder selections, and creates an empty default model folder on first launch.
+- **Chat and Workspace tabs:** independent histories and prompts. Chat handles normal conversation; Workspace retains project files, agent tools and approvals. Existing sessions remain in Workspace.
+- **Per-chat system prompts:** edit instructions beside the composer or inherit the app default. Prompts persist with that chat and survive export/import.
+- **Background replies:** create/open other chats and prepare drafts while a reply continues in its original conversation. Return through View reply, or stop it from the generation banner. Text, image and prompt drafts stay with their own chats; pending write approvals are retained. One model request runs at a time.
+- **Image attachments and setup:** choose, paste or drop images before vision is configured. Set up the matching local projector through the composer; settings are saved per model. Actual Gemma image understanding was verified.
+- **Themes:** Forest, Daylight, Midnight, Ocean, Amethyst, Graphite, Sand and Follow system.
+- **Low-memory loading:** streamed weights plus on-demand large embeddings, including Windows. Automatic hybrid layer placement uses available RAM/VRAM while preserving the configured reserve. Actual Gemma hybrid loading/inference passed with low free RAM.
+- **Windows fixes:** the model folder picker opens directly, missing default folders are created, and redirected profile storage handles rename/copy failures with recovery-backed writes.
 
-Redirected Windows profile storage now handles cross-device rename failures with a completed recovery file before directly writing the primary file, avoiding Windows copy-overwrite errors as well. Interrupted settings/chat writes can recover on restart while preserving damaged originals.
+Forge also includes persistent local sessions/notes, GGUF CPU/GPU/hybrid inference, document tools, MCP, skills, local API/remote endpoints, local Whisper setup, and optional LoRA training/conversion/stacking.
 
-- GGUF inference with CPU/RAM, GPU/VRAM, and hybrid layer offloading.
-- Image attachments with a compatible vision model and matching GGUF projector.
-- Responsive resource profile, memory headroom checks, loading cancellation, and runtime logs.
-- Individual local chat files, session notes, restart recovery, fork/archive/restore, and export/import.
-- Document editing and an agent with reviewable file writes.
-- Advanced system prompt, temperature, top-P/top-K/min-P, repeat penalty, seed, and context controls.
-- Local Whisper voice transcription and optional system speech playback.
-- MCP tools, reusable skills, remote OpenAI-compatible devices, and a local model API.
-- Optional local LoRA trainer with optimizer checkpoints, pause/resume, cancellation, and adapter export.
-- Automatic chat/document dataset import (JSON/JSONL/TXT/Markdown/CSV/TSV/PDF/DOCX/DOC), named trained adapters, GGUF conversion and multi-adapter stacking.
-- New Forge icon, themes, and background tray/dock operation.
+Download the package matching your operating system and CPU architecture. Installers contain the application features; models, native inference/voice runtimes and the optional Python training engine are configured separately on each computer. Training uses a supported local Hugging Face causal model, not a GGUF directly. Hardware memory, GPU drivers and model capabilities still determine what each device can run.
 
-Choose the package matching your OS and CPU architecture. Models, inference runtimes, Whisper models, and the optional Python training environment are downloaded/configured separately and are not bundled in the installers.
+Packages are currently unsigned. macOS distribution is not notarized; Windows SmartScreen and macOS may require source verification and an explicit per-app allowance. Linux AppImage operation depends on desktop/FUSE support. Windows ARM64 is cross-built. All platform packages run backend checks; the Windows x64 job also runs GUI regressions. Native macOS/Linux GPU/audio behavior has not been tested on physical machines in this development session.
 
-The first release is unsigned. macOS users may need to explicitly allow the application in System Settings after verifying its source. Public notarized/signature-verified distribution requires maintainer signing credentials. Linux AppImage use depends on the host desktop/FUSE support. Windows ARM64 packages are cross-built; confirm native runtime and model compatibility on the target device.
-
-Training requires a supported local Hugging Face base model; it does not modify GGUF files. The default training engine uses CPU PyTorch. GPU training needs a compatible GPU PyTorch installation and sufficient memory. Native OS audio, GPU driver compatibility, external MCP services, and remote devices also depend on their separate configuration.
-
-See README.md for setup, local data paths, test coverage, and current limitations. SHA256SUMS.txt contains checksums for all packages in this release.
+See README.md and TRAINING.md for setup and supported data formats. VALIDATION.md records test scope and hardware observations. SHA256SUMS.txt contains package checksums.

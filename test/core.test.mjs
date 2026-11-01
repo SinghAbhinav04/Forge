@@ -110,6 +110,21 @@ test('vision attachments reach the model as image content and persist in the cha
   assert.equal(reopened.state.sessions[0].messages[0].images[0].url,image.url);
   for (const input of [[null],[{ url:'https://example.com/image.png' }],[{ url:'data:image/svg+xml;base64,PHN2Zz4=' }],[image,image,image]]) assert.throws(() => validateImages(input));
 });
+
+test('general chat uses its own prompt and cannot acquire workspace tools through the requested mode',async t => {
+  const f=await agentFixture(t,[completion('Paris.')]); f.session.kind='chat'; f.session.workspaceId=null; f.session.memory='Keep answers short.';
+  f.store.state.settings.systemPrompt='WORKSPACE_ONLY: discuss Welcome.md and project files.';
+  f.store.state.settings.chatSystemPrompt='You are a general assistant. Answer everyday questions directly.';
+  await f.agent.run({ ...f,workspace:null,text:'What is the capital of France?',mode:'agent',emit:()=>{} });
+  assert.equal(f.requests[0].tools,undefined); assert.equal(f.requests[0].tool_choice,undefined);
+  const input=JSON.stringify(f.requests[0].messages); assert.ok(!input.includes('Welcome.md')); assert.ok(!input.includes('WORKSPACE_ONLY')); assert.ok(input.includes('Keep answers short.')); assert.ok(input.includes('general assistant'));
+});
+
+test('each chat can override its system prompt without changing other chats or the defaults',async t=>{
+ const f=await agentFixture(t,[completion('First.'),completion('Second.')]);f.session.kind='chat';f.session.systemPrompt='Use a friendly, concise voice.';
+ const original=f.store.state.settings.chatSystemPrompt;await f.agent.run({...f,text:'Hello',mode:'chat',emit:()=>{}});assert.ok(f.requests[0].messages[0].content.startsWith(f.session.systemPrompt));
+ f.session.systemPrompt=null;await f.agent.run({...f,text:'Hello again',mode:'chat',emit:()=>{}});assert.ok(f.requests[1].messages[0].content.startsWith(original));assert.equal(f.store.state.settings.chatSystemPrompt,original);
+});
 test('editing a file while a proposal is pending rejects the stale proposal', async t => {
   const f = await agentFixture(t, [toolCall('write_file', { path: 'Draft.md', content: 'agent version' }), completion('The file changed; please review again.')]);
   await fs.writeFile(path.join(f.workspace.path, 'Draft.md'), 'original');

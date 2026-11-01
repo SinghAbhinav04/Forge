@@ -48,6 +48,12 @@ jobs:
       - run: npm ci
       - run: npm run check
       - run: npm test
+      - name: Check separate Chat and Workspace behavior
+        if: matrix.platform == 'windows' && matrix.arch == 'x64'
+        run: node scripts/smoke-chat.mjs
+      - name: Check background generation, prompts, images and themes
+        if: matrix.platform == 'windows' && matrix.arch == 'x64'
+        run: node scripts/smoke-composer.mjs
       - name: Check release tag matches package version
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
