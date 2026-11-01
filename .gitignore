@@ -1,0 +1,10 @@
+node_modules/
+.data/
+runtime/
+*.log
+dist/
+test-artifacts/
+workspace/**
+!workspace/Welcome.md
+__pycache__/
+*.pyc

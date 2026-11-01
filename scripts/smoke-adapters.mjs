@@ -1,0 +1,29 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import assert from 'node:assert/strict';
+import { openStore } from '../src/store.mjs';
+import { Trainer,trainingPython } from '../src/trainer.mjs';
+import { AdapterLibrary } from '../src/adapters.mjs';
+import { AdapterConverter,ensureConverter,converterCommand } from '../src/converter.mjs';
+import { Runtime,sseData } from '../src/runtime.mjs';
+const root=path.resolve('.'); const output=path.resolve(`test-artifacts/adapters-${Date.now()}`); await fs.mkdir(output,{ recursive:true }); const python=trainingPython(path.resolve('.data'));
+await converterCommand(python,['scripts/create-lora-fixture.py',output],{ log:()=>{} });
+const source=await ensureConverter(path.resolve('.data')); const base=path.join(output,'base.gguf');
+await converterCommand(python,[path.join(source,'convert_hf_to_gguf.py'),'--outfile',base,'--outtype','f16',path.join(output,'base')],{ log:()=>{},env:{ HF_HUB_OFFLINE:'1',TRANSFORMERS_OFFLINE:'1' } });
+const store=await openStore(root,path.join(output,'data'),path.join(output,'workspace')); await fs.symlink(path.resolve('.data/training-env'),path.join(store.dataDir,'training-env'),process.platform==='win32' ? 'junction' : 'dir'); await fs.mkdir(path.join(store.dataDir,'converter'),{ recursive:true }); await fs.writeFile(path.join(store.dataDir,'converter','current.json'),JSON.stringify({ source }));
+const runtime=new Runtime(root); const library=new AdapterLibrary(store); const trainer=new Trainer(root,store,runtime); trainer.adapterLibrary=library; const converter=new AdapterConverter(store,library);
+const until=async predicate => { const end=Date.now()+120000; while (!predicate()) { if (Date.now()>end || trainer.job?.status==='error') throw new Error(`Adapter smoke timed out: ${trainer.job?.error}\n${trainer.logs.slice(-15).join('\n')}`); await new Promise(r => setTimeout(r,30)); } };
+try {
+  await trainer.start({ name:'Llama test',baseModel:path.join(output,'base'),dataset:path.join(output,'data.jsonl'),device:'cpu',epochs:1,maxSteps:2,maxLength:32,batchSize:1,gradientAccumulation:1,loraRank:4,saveEvery:1 }); await until(() => !trainer.child && store.state.adapters.length===1);
+  const adapter=store.state.adapters[0]; assert.ok(adapter.folder.includes(`${path.sep}trained${path.sep}`)); await library.rename(adapter.id,'Named test LoRA'); await fs.access(path.join(adapter.folder,'adapter_model.safetensors'));
+  await converter.start(adapter.id,base); await until(() => !converter.tasks.has(adapter.id)); if (!adapter.ggufPath) throw new Error(`${adapter.conversion.error}\n${adapter.conversion.logs.join('\n')}`);
+  const second=await library.importGguf(adapter.ggufPath,'Second stack member',base); await library.stack([{ id:adapter.id,scale:.5 },{ id:second.id,scale:.5 }]);
+  const model={ path:base,name:'tiny-lora-test',bytes:(await fs.stat(base)).size }; const selected=await library.forModel(model);
+  await runtime.load(model,{ executionMode:'cpu',gpuLayers:0,contextSize:512,threads:2,performanceMode:'responsive',batchSize:64,microBatchSize:32,reserveRamGiB:2,kvOnGpu:false,loraAdapters:selected }); await until(() => runtime.status!=='loading'); if (runtime.status!=='ready') throw new Error(runtime.error);
+  const loaded=await (await fetch(`http://127.0.0.1:${runtime.port}/lora-adapters`,{ headers:{ Authorization:`Bearer ${runtime.key}` } })).json(); assert.equal(loaded.length,2); assert.equal(loaded[0].scale,.5); assert.equal(loaded[1].scale,.5);
+  const response=await runtime.completion({ messages:[{ role:'user',content:'Hello' }],stream:true,max_tokens:8,temperature:0 },AbortSignal.timeout(30000)); let text=''; for await (const e of sseData(response.body)) text+=e.choices?.[0]?.delta?.content || ''; assert.ok(text.length>0);
+  await runtime.applyAdapterStack([{ id:adapter.id,scale:.75 }]); const changed=await (await fetch(`http://127.0.0.1:${runtime.port}/lora-adapters`,{ headers:{ Authorization:`Bearer ${runtime.key}` } })).json(); assert.equal(changed[0].scale,.75); assert.equal(changed[1].scale,0);
+  await library.remove(second.id); assert.equal(store.state.adapters.length,1); await fs.access(second.ggufPath);
+  await fs.writeFile(path.join(output,'result.json'),JSON.stringify({ adapter:adapter.name,trainedFolder:library.directory,stacked:loaded,removedScale:changed,text },null,2));
+  console.log('LoRA smoke passed: actual training, named export in trained/, GGUF conversion, loading two adapters, inference, scale adjustment and removal.');
+} finally { await trainer.close(); await converter.close(); runtime.busy=false; await runtime.stop(); }

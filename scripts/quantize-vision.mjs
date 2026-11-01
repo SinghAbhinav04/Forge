@@ -1,0 +1,5 @@
+import fs from 'node:fs/promises'; import path from 'node:path'; import { spawn } from 'node:child_process';
+const type=process.argv[2] || 'Q8_0'; if (!['Q8_0','Q4_K_M'].includes(type)) throw new Error('Choose Q8_0 or Q4_K_M.');
+const current=JSON.parse(await fs.readFile('.data/vision-projector.json','utf8')); const source=current.source || current.path; const runtime=JSON.parse(await fs.readFile('runtime/current.json','utf8')); const executable=path.join(path.dirname(path.resolve('runtime',runtime.executable)),process.platform==='win32' ? 'llama-quantize.exe' : 'llama-quantize'); const output=source.replace(/\.gguf$/i,`-${type}.gguf`);
+await new Promise((resolve,reject) => { const child=spawn(executable,[source,output,type,'2'],{ windowsHide:true,stdio:'inherit' }); child.once('error',reject); child.once('exit',code => code===0 ? resolve() : reject(new Error(`Quantizer failed (${code})`))); });
+await fs.writeFile('.data/vision-projector.json',JSON.stringify({ path:output,source },null,2)); console.log('Saved vision projector:',output);

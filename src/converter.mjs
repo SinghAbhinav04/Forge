@@ -1,0 +1,45 @@
+import fs from 'node:fs/promises';
+import { createWriteStream } from 'node:fs';
+import path from 'node:path';
+import { spawn } from 'node:child_process';
+import { pipeline } from 'node:stream/promises';
+import { Readable } from 'node:stream';
+import { trainingPython } from './trainer.mjs';
+const command=(exe,args,{ signal,log=()=>{},env={} }={}) => new Promise((resolve,reject) => { const child=spawn(exe,args,{ windowsHide:true,signal,env:{ ...process.env,OMP_NUM_THREADS:'2',TOKENIZERS_PARALLELISM:'false',...env },stdio:['ignore','pipe','pipe'] }); let tail=''; for (const stream of [child.stdout,child.stderr]) stream.on('data',chunk => { tail=(tail+chunk).slice(-6000); log(String(chunk)); }); child.once('error',reject); child.once('exit',code => code===0 ? resolve() : reject(new Error(`Converter process failed (${code}): ${tail}`))); });
+let setupPromise;
+export async function ensureConverter(dataDir,{ signal,log=console.log }={}) {
+  const root=path.join(dataDir,'converter'); const marker=path.join(root,'current.json');
+  try { const current=JSON.parse(await fs.readFile(marker,'utf8')); await fs.access(path.join(current.source,'convert_lora_to_gguf.py')); return current.source; } catch {}
+  if (setupPromise) return setupPromise;
+  setupPromise=(async () => {
+    await fs.mkdir(root,{ recursive:true });
+    const response=await fetch('https://api.github.com/repos/ggml-org/llama.cpp/commits/master',{ headers:{ 'User-Agent':'Forge/0.2' },signal }); if (!response.ok) throw new Error('Cannot resolve the official llama.cpp converter source.'); const commit=(await response.json()).sha; if (!/^[a-f0-9]{40}$/.test(commit)) throw new Error('Invalid converter source commit.');
+    const archive=path.join(root,`${commit}.zip`); log(`Downloading official llama.cpp converter source at ${commit.slice(0,12)}…`);
+    const sourceResponse=await fetch(`https://github.com/ggml-org/llama.cpp/archive/${commit}.zip`,{ signal }); if (!sourceResponse.ok) throw new Error(`Source download failed (${sourceResponse.status}).`); await pipeline(Readable.fromWeb(sourceResponse.body),createWriteStream(archive),{ signal });
+    await command('tar',['-xf',archive,'-C',root],{ signal,log }); const source=path.join(root,`llama.cpp-${commit}`); await fs.access(path.join(source,'convert_lora_to_gguf.py'));
+    log('Installing converter helpers into the isolated training environment…'); await command(trainingPython(dataDir),['-m','pip','install','sentencepiece','protobuf','tiktoken','gguf'],{ signal,log });
+    await fs.writeFile(marker,JSON.stringify({ source,commit },null,2)); return source;
+  })();
+  try { return await setupPromise; } finally { setupPromise=null; }
+}
+export class AdapterConverter {
+  constructor(store,library) { this.store=store; this.library=library; this.tasks=new Map(); }
+  async start(id,baseGguf) {
+    const adapter=this.store.state.adapters.find(a => a.id===id); if (!adapter?.baseModel || !adapter.folder) throw new Error('This PEFT adapter needs its original local Hugging Face base folder.');
+    if (this.tasks.has(id)) throw new Error('This adapter is already converting.'); await fs.access(baseGguf); await fs.access(trainingPython(this.store.dataDir));
+    const controller=new AbortController(); adapter.conversion={ status:'preparing',logs:[],error:'' }; const log=text => { adapter.conversion.logs=[...adapter.conversion.logs,...text.split(/\r?\n/).filter(Boolean).map(l => l.slice(0,1500))].slice(-40); };
+    const task=(async () => {
+      try {
+        const source=await ensureConverter(this.store.dataDir,{ signal:controller.signal,log }); controller.signal.throwIfAborted(); adapter.conversion.status='converting';
+        const outfile=path.join(adapter.folder,'adapter.gguf');
+        await command(trainingPython(this.store.dataDir),[path.join(source,'convert_lora_to_gguf.py'),'--base',adapter.baseModel,'--outfile',outfile,'--outtype','f16',adapter.folder],{ signal:controller.signal,log,env:{ HF_HUB_OFFLINE:'1',TRANSFORMERS_OFFLINE:'1' } });
+        const { ggufMetadata }=await import('./hardware.mjs'); const actual=await ggufMetadata(outfile); const base=await ggufMetadata(baseGguf); if (actual.kind!=='adapter' || actual.adapterType!=='lora' || actual.architecture!==base.architecture) throw new Error('Converted adapter is incompatible with the selected base GGUF architecture.');
+        adapter.ggufPath=outfile; adapter.baseGguf=baseGguf; adapter.format='peft+gguf'; adapter.conversion.status='completed';
+      } catch (error) { adapter.conversion.status=controller.signal.aborted ? 'cancelled' : 'error'; adapter.conversion.error=error.message; }
+      finally { this.tasks.delete(id); await this.store.save(); }
+    })(); this.tasks.set(id,{ task,controller }); void task.catch(() => {}); await this.store.save(); return { started:true };
+  }
+  async cancel(id) { const item=this.tasks.get(id); if (!item) throw new Error('No active conversion.'); item.controller.abort(); await item.task; return { cancelled:true }; }
+  async close() { for (const item of this.tasks.values()) item.controller.abort(); await Promise.allSettled([...this.tasks.values()].map(i => i.task)); }
+}
+export { command as converterCommand };

@@ -1,0 +1,33 @@
+import path from 'node:path';
+import fs from 'node:fs/promises';
+import assert from 'node:assert/strict';
+import { Runtime, scanModels, sseData } from '../src/runtime.mjs';
+import { openStore } from '../src/store.mjs';
+import { Agent } from '../src/agent.mjs';
+const root = path.resolve('.');
+const runtime = new Runtime(root);
+const models = await scanModels(path.resolve('../models'));
+if (!models.length) throw new Error('Place a GGUF in ../models before running the inference smoke.');
+const output = path.resolve('test-artifacts', 'inference'); await fs.mkdir(output, { recursive: true });
+const store = await openStore(root, path.join(output, 'data'), path.join(output, 'workspace'));
+Object.assign(store.state.settings, { contextSize: 4096, gpuLayers: 16, threads: 6, maxTokens: 768, temperature: 0 });
+await store.save();
+const session = { id: `smoke-${Date.now()}`, title: 'New session', messages: [] }; store.state.sessions.push(session);
+try {
+  await runtime.load(models[0], store.state.settings);
+  const deadline = Date.now() + 5 * 60_000;
+  while (runtime.status === 'loading' && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 1000));
+  if (runtime.status !== 'ready') throw new Error(`${runtime.error}\n${runtime.logs.slice(-25).join('\n')}`);
+  console.log(`Loaded ${models[0].name}. Testing streaming inference…`);
+  const response = await runtime.completion({ messages: [{ role: 'user', content: 'Say hello in one short sentence.' }], max_tokens: 64, temperature: 0, stream: true }, AbortSignal.timeout(120000));
+  let text = ''; for await (const e of sseData(response.body)) text += e.choices?.[0]?.delta?.content || '';
+  assert.ok(text.trim(), 'Model must return actual text'); console.log(`Model response: ${text.trim()}`);
+  const agent = new Agent(runtime, store); const events = [];
+  console.log('Testing actual model tool calls and an approved document write…');
+  await agent.run({ session, workspace: store.state.workspaces[0], text: 'Use the write_file tool now to create Smoke.md with exactly this content: # Hello from Local Desk. Do not just explain how; call the tool. After it succeeds, say Done.', mode: 'agent', signal: AbortSignal.timeout(180000), emit: event => { events.push(event); if (event.type === 'approval') { console.log(`Approving test-only write: ${event.path}`); queueMicrotask(() => agent.approve(event.id, true)); } if (event.type === 'error') console.log(`Agent error: ${event.message}`); if (event.type === 'tool') console.log(`Tool: ${event.name}`); } });
+  const saved = await fs.readFile(path.join(store.state.workspaces[0].path, 'Smoke.md'), 'utf8');
+  assert.ok(saved.includes('Hello from Local Desk'));
+  assert.ok(events.some(e => e.type === 'done'));
+  await fs.writeFile(path.join(output, 'result.json'), JSON.stringify({ model: models[0].name, chat: text, saved, events: events.map(e => e.type), settings: store.state.settings }, null, 2));
+  console.log('Real inference smoke passed: model loading, streaming, tool calls, and approved file creation.');
+} finally { runtime.busy = false; await runtime.stop(); }

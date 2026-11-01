@@ -1,0 +1,110 @@
+{
+  "name": "forge-desktop",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Forge: a private desktop workspace for local AI, documents and training",
+  "author": {
+    "name": "SinghAbhinav04",
+    "email": "SinghAbhinav04@users.noreply.github.com"
+  },
+  "homepage": "https://github.com/SinghAbhinav04/Forge",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/SinghAbhinav04/Forge.git"
+  },
+  "license": "MIT",
+  "type": "module",
+  "main": "desktop/main.cjs",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node src/server.mjs",
+    "desktop": "electron .",
+    "setup:runtime": "node scripts/install-runtime.mjs",
+    "test": "node --test test/*.test.mjs",
+    "check": "node scripts/check.mjs",
+    "icons": "electron scripts/render-icons.cjs",
+    "setup:training": "node scripts/setup-training.mjs",
+    "test:desktop": "node scripts/smoke-desktop.mjs",
+    "pack": "electron-builder --dir",
+    "dist:win": "electron-builder --win nsis --x64",
+    "dist:mac": "electron-builder --mac dmg --arm64 --x64",
+    "dist:linux": "electron-builder --linux AppImage deb --x64 --arm64"
+  },
+  "build": {
+    "appId": "dev.forge.desktop",
+    "productName": "Forge",
+    "icon": "public/icon.png",
+    "asarUnpack": [
+      "scripts/train_lora.py",
+      "scripts/setup-training.mjs"
+    ],
+    "artifactName": "Forge-${version}-${os}-${arch}.${ext}",
+    "publish": {
+      "provider": "github",
+      "owner": "SinghAbhinav04",
+      "repo": "Forge"
+    },
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "desktop/**",
+      "src/**",
+      "public/**",
+      "scripts/install-runtime.mjs",
+      "scripts/install-voice.mjs",
+      "scripts/setup-training.mjs",
+      "scripts/train_lora.py",
+      "workspace/Welcome.md",
+      "package.json"
+    ],
+    "asar": true,
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory":true,
+      "createDesktopShortcut":true,
+      "createStartMenuShortcut":true,
+      "shortcutName":"Forge",
+      "runAfterFinish":false
+    },
+    "mac": {
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "Forge records microphone audio only when you choose Record, for local speech transcription."
+      },
+      "category": "public.app-category.productivity",
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "linux": {
+      "executableName":"forge",
+      "desktop":{ "entry":{ "Name":"Forge","StartupWMClass":"Forge","Comment":"Local AI workspace, models and training" } },
+      "category": "Utility",
+      "target": [
+        "AppImage",
+        "deb"
+      ]
+    }
+  },
+  "devDependencies": {
+    "electron": "^45.2.1",
+    "electron-builder": "^26.18.0",
+    "playwright": "^1.64.1"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "@thednp/dommatrix": "^3.1.2",
+    "csv-parse": "^7.0.3",
+    "mammoth": "^1.13.0",
+    "pdfjs-dist": "^6.4.299",
+    "word-extractor": "^1.0.4"
+  }
+}
