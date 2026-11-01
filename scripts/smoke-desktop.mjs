@@ -16,6 +16,17 @@ try {
   await page.waitForSelector('.model-card');
   assert.ok(await page.locator('.model-card').count());
   await page.screenshot({ path: path.join(output, 'models.png') });
+  const originalModels=await page.locator('#models-folder').textContent();
+  const pickedModels=path.join(testRoot,'picked-models'); await fs.mkdir(pickedModels); await fs.writeFile(path.join(pickedModels,'picked.gguf'),'GGUF');
+  await app.evaluate(({ dialog },folder) => { globalThis.__forgeOriginalDialog=dialog.showOpenDialog; dialog.showOpenDialog=async () => ({ canceled:false,filePaths:[folder] }); },pickedModels);
+  await page.locator('#change-model-folder').click();
+  await page.waitForFunction(folder => document.getElementById('models-folder').textContent===folder,pickedModels);
+  assert.equal(await page.locator('#models-view').isVisible(),true); assert.ok((await page.locator('#model-list').textContent()).includes('picked'));
+  const savedFolder=JSON.parse(await fs.readFile(path.join(testRoot,'data/state.json'),'utf8')).settings.modelDir; assert.equal(savedFolder,pickedModels);
+  await app.evaluate(({ dialog }) => { dialog.showOpenDialog=async () => ({ canceled:true,filePaths:[] }); }); await page.locator('#change-model-folder').click();
+  assert.equal(await page.locator('#models-folder').textContent(),pickedModels);
+  await app.evaluate(({ dialog }) => { dialog.showOpenDialog=globalThis.__forgeOriginalDialog; delete globalThis.__forgeOriginalDialog; });
+  await page.evaluate(async folder => { await fetch('/api/settings',{ method:'PATCH',headers:{ 'Content-Type':'application/json','X-Local-Desk-Token':sessionStorage.getItem('local-desk-token') },body:JSON.stringify({ modelDir:folder }) }); },originalModels);
   await page.locator('[data-view="settings"]').click();
   await page.locator('[data-panel="defaults"]').click();
   await page.waitForSelector('#setting-contextSize');

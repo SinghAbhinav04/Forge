@@ -1,4 +1,6 @@
-Forge 0.2 is a local desktop AI workspace for Windows, macOS, and Linux.
+Forge 0.2.1 is a local desktop AI workspace for Windows, macOS, and Linux.
+
+This update fixes the Library's Change folder button so it opens the native picker directly, validates folder selections, and creates an empty default model folder on first launch.
 
 - GGUF inference with CPU/RAM, GPU/VRAM, and hybrid layer offloading.
 - Image attachments with a compatible vision model and matching GGUF projector.

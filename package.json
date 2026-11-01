@@ -1,6 +1,6 @@
 {
   "name": "forge-desktop",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "description": "Forge: a private desktop workspace for local AI, documents and training",
   "author": {

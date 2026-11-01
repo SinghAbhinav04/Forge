@@ -148,6 +148,8 @@ test('local API enforces authentication/origin, validates settings, saves files 
   assert.equal(bootstrap.workspaces.length, 1);
   assert.equal((await request('/api/settings', 'PATCH', { gpuLayers: -1 })).status, 400);
   assert.equal((await request('/api/settings', 'PATCH', { temperature: 0.5 })).status, 200);
+  assert.equal((await request('/api/settings','PATCH',{ modelDir:path.join(root,'missing-model-folder') })).status,400);
+  assert.equal((await request('/api/settings','PATCH',{ modelDir:root })).status,200);
   const workspaceId = bootstrap.workspaces[0].id;
   const saved = await request('/api/file', 'PUT', { workspaceId, path: 'Test.md', content: '# Test', hash: null }); assert.equal(saved.status, 200);
   const conflict = await request('/api/file', 'PUT', { workspaceId, path: 'Test.md', content: '# Changed', hash: null }); assert.equal(conflict.status, 400);
@@ -155,4 +157,12 @@ test('local API enforces authentication/origin, validates settings, saves files 
   const notLoaded = await request('/api/chat', 'POST', { sessionId: session.id, text: 'Hello' }); assert.equal(notLoaded.status, 400);
   const encoded = new URLSearchParams({ workspaceId, path: '../outside.md' }); assert.equal((await request(`/api/file?${encoded}`)).status, 400);
   const final = await (await request('/api/bootstrap')).json(); assert.equal(final.settings.temperature, 0.5); assert.equal(final.sessions.length, 1);
+});
+
+test('first launch creates its default model folder rather than returning a scan error',async t => {
+  const { root,beforeCleanup }=await fixture(t); const folder=path.join(root,'Documents','Models');
+  const app=await createApplication({ appRoot:root,defaultModelDir:folder }); beforeCleanup.push(() => app.close());
+  assert.ok((await fs.stat(folder)).isDirectory());
+  const data=await (await fetch(app.origin+'/api/bootstrap',{ headers:{ 'X-Local-Desk-Token':app.token } })).json();
+  assert.equal(data.modelError,''); assert.equal(data.settings.modelDir,folder); assert.deepEqual(data.models,[]);
 });

@@ -13,6 +13,7 @@ export async function openStore(appRoot, dataDir = path.join(appRoot, '.data'), 
   catch (error) {
     if (error.code !== 'ENOENT') throw new Error(`Cannot read saved workspace data: ${error.message}`);
     const workspace = workspaceDir || path.join(appRoot, 'workspace'); await fs.mkdir(workspace, { recursive:true });
+    if (defaultModelDir) await fs.mkdir(defaultModelDir,{ recursive:true });
     if (workspaceDir) { try { await fs.copyFile(path.join(appRoot,'workspace','Welcome.md'), path.join(workspace,'Welcome.md'), (await import('node:fs')).constants.COPYFILE_EXCL); } catch (e) { if (!['EEXIST','ENOENT'].includes(e.code)) throw e; } }
     state = { version:2, settings:{ ...defaults(appRoot), ...(defaultModelDir ? { modelDir:defaultModelDir } : {}) }, workspaces:[{ id:randomUUID(), name:'My workspace', path:workspace }], sessions:[] };
   }

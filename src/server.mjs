@@ -66,6 +66,7 @@ export async function createApplication(options = {}) {
         }
         if (route === '/api/settings' && req.method === 'PATCH') {
           const input=await jsonBody(req); const settings=validateSettings(input,store.state.settings);
+          if (input.modelDir!==undefined) { try { if (!(await fs.stat(settings.modelDir)).isDirectory()) throw new Error('Not a directory'); } catch { throw new Error('Choose an existing folder containing your GGUF files.'); } }
           if (runtime.sampling) for (const key of ['temperature','maxTokens','topP','topK','minP','repeatPenalty','seed']) if (input[key]!==undefined) runtime.sampling[key]=settings[key];
           store.state.settings = settings; modelCache=null; await store.save(); options.onSettings?.(settings); json(res,200,settings); return;
         }

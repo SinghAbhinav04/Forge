@@ -310,7 +310,13 @@ $('editor').oninput = () => { if (state.file) { state.file.content = $('editor')
 $('save-file').onclick = saveFile;
 $('preview-toggle').onclick = () => { state.preview = !state.preview; renderEditor(); };
 $('refresh-models').onclick = async () => { try { await refresh(); toast('Model library refreshed.'); } catch (error) { fail(error); } };
-$('change-model-folder').onclick = () => { showView('settings'); $('setting-modelDir').focus(); };
+$('change-model-folder').onclick = async () => {
+  try {
+    const folder=window.desktop ? await window.desktop.chooseFolder() : await askPath('Model folder','Enter the absolute path containing your GGUF files.',state.data.settings.modelDir);
+    if (!folder) return;
+    await api('/api/settings',{ method:'PATCH',body:{ modelDir:folder } }); await refresh(); toast('Model folder updated.');
+  } catch (error) { fail(error); }
+};
 $('unload-model').onclick = async () => { try { state.data.runtime = await api('/api/model/unload', { method: 'POST', body: {} }); renderRuntime(); } catch (error) { fail(error); } };
 $('add-workspace').onclick = async () => {
   try { const folder = window.desktop ? await window.desktop.chooseFolder() : await askPath('Open project folder', 'Enter the absolute path of an existing folder. The workspace agent will be able to read its text files and propose writes inside it.'); if (!folder) return; if (!clean()) return;
