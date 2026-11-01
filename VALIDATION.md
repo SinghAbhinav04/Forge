@@ -1,4 +1,4 @@
-# Forge 0.2.4 verification
+# Forge 0.2.5 verification
 
 ## Automated checks
 

@@ -2,7 +2,7 @@ import { _electron as electron } from 'playwright';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import assert from 'node:assert/strict';
-const output=path.resolve('test-artifacts'); const root=await fs.mkdtemp(path.join(output,'vision-ui-')); const env={ ...process.env,LOCAL_DESK_TEST_ROOT:root }; delete env.ELECTRON_RUN_AS_NODE;
+const output=path.resolve('test-artifacts'); await fs.mkdir(path.resolve('test-artifacts'),{recursive:true}); const root=await fs.mkdtemp(path.join(output,'vision-ui-')); const env={ ...process.env,LOCAL_DESK_TEST_ROOT:root }; delete env.ELECTRON_RUN_AS_NODE;
 const projector=JSON.parse(await fs.readFile('.data/vision-projector.json','utf8')).path;
 const app=await electron.launch({ args:['.'],env,timeout:60000 });
 try {

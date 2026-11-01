@@ -1,5 +1,5 @@
 import { _electron as electron } from 'playwright'; import fs from 'node:fs/promises'; import path from 'node:path'; import os from 'node:os'; import assert from 'node:assert/strict';
-const root=await fs.mkdtemp(path.resolve('test-artifacts/hybrid-ui-')); const env={ ...process.env,LOCAL_DESK_TEST_ROOT:root }; delete env.ELECTRON_RUN_AS_NODE;
+await fs.mkdir(path.resolve('test-artifacts'),{recursive:true}); const root=await fs.mkdtemp(path.resolve('test-artifacts/hybrid-ui-')); const env={ ...process.env,LOCAL_DESK_TEST_ROOT:root }; delete env.ELECTRON_RUN_AS_NODE;
 const app=await electron.launch({ args:['.'],env,timeout:60000 }); let minFreeGiB=os.freemem()/2**30; const monitor=setInterval(()=>minFreeGiB=Math.min(minFreeGiB,os.freemem()/2**30),50);
 try {
  const page=await app.firstWindow(); await page.waitForFunction(()=>document.getElementById('hardware-label')?.textContent.includes('GB RAM')); const errors=[]; page.on('pageerror',e=>errors.push(e.message));

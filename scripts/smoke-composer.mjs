@@ -1,5 +1,5 @@
 import { _electron as electron } from 'playwright';import fs from 'node:fs/promises';import path from 'node:path';import http from 'node:http';import assert from 'node:assert/strict';
-const root=await fs.mkdtemp(path.resolve('test-artifacts/composer-'));const env={...process.env,LOCAL_DESK_TEST_ROOT:root};delete env.ELECTRON_RUN_AS_NODE;const requests=[];let releaseSlow,slowResponse;
+await fs.mkdir(path.resolve('test-artifacts'),{recursive:true}); const root=await fs.mkdtemp(path.resolve('test-artifacts/composer-'));const env={...process.env,LOCAL_DESK_TEST_ROOT:root};delete env.ELECTRON_RUN_AS_NODE;const requests=[];let releaseSlow,slowResponse;
 const frame=(res,delta,finish)=>res.write(`data: ${JSON.stringify({choices:[{delta,...(finish?{finish_reason:finish}:{})}]})}\n\n`);
 const remote=http.createServer(async(req,res)=>{
  if(req.url==='/v1/models'){res.setHeader('Content-Type','application/json');res.end(JSON.stringify({data:[{id:'composer-fixture'}]}));return;}

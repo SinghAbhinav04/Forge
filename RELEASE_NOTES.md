@@ -1,4 +1,4 @@
-Forge 0.2.4 adds a separate normal Chat experience and fixes model loading and conversation controls.
+Forge 0.2.5 adds a separate normal Chat experience and fixes model loading and conversation controls. It also fixes first-run setup for the release GUI checks.
 
 - **Chat and Workspace tabs:** independent histories and prompts. Chat handles normal conversation; Workspace retains project files, agent tools and approvals. Existing sessions remain in Workspace.
 - **Per-chat system prompts:** edit instructions beside the composer or inherit the app default. Prompts persist with that chat and survive export/import.

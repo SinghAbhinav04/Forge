@@ -1,5 +1,5 @@
 import { _electron as electron } from 'playwright';import fs from 'node:fs/promises';import path from 'node:path';import assert from 'node:assert/strict';
-const root=await fs.mkdtemp(path.resolve('test-artifacts/normal-gemma-'));const env={...process.env,LOCAL_DESK_TEST_ROOT:root};delete env.ELECTRON_RUN_AS_NODE;
+await fs.mkdir(path.resolve('test-artifacts'),{recursive:true}); const root=await fs.mkdtemp(path.resolve('test-artifacts/normal-gemma-'));const env={...process.env,LOCAL_DESK_TEST_ROOT:root};delete env.ELECTRON_RUN_AS_NODE;
 const app=await electron.launch({args:['.'],env,timeout:60000});
 try{
  const page=await app.firstWindow();const errors=[];page.on('pageerror',e=>errors.push(e.message));await page.waitForFunction(()=>document.getElementById('hardware-label')?.textContent.includes('GB RAM'));

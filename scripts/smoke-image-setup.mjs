@@ -1,5 +1,5 @@
 import { _electron as electron } from 'playwright';import fs from 'node:fs/promises';import path from 'node:path';import os from 'node:os';import assert from 'node:assert/strict';
-const installed=process.argv.includes('--installed');const root=await fs.mkdtemp(path.resolve('test-artifacts/image-setup-'));const env={...process.env,...(installed?{}:{LOCAL_DESK_TEST_ROOT:root})};delete env.ELECTRON_RUN_AS_NODE;
+const installed=process.argv.includes('--installed');await fs.mkdir(path.resolve('test-artifacts'),{recursive:true}); const root=await fs.mkdtemp(path.resolve('test-artifacts/image-setup-'));const env={...process.env,...(installed?{}:{LOCAL_DESK_TEST_ROOT:root})};delete env.ELECTRON_RUN_AS_NODE;
 if(installed&&process.platform!=='win32')throw new Error('--installed currently verifies the Windows installation; run without it for source checks on other systems.');
 let installedExe;for(const folder of [process.env.LOCALAPPDATA,path.join(os.homedir(),'AppData','Local')].filter(Boolean)){const candidate=path.join(folder,'Programs','Forge','Forge.exe');try{await fs.access(candidate);installedExe=candidate;break;}catch{}}
 if(installed&&!installedExe)throw new Error('The default per-user Forge installation was not found.');
