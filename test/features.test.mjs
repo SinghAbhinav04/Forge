@@ -13,6 +13,7 @@ import { Runtime } from '../src/runtime.mjs';
 import { memoryPlan } from '../src/hardware.mjs';
 import { validateSettings } from '../src/settings.mjs';
 import { Downloads,searchModels } from '../src/hub.mjs';
+import { atomicJson } from '../src/storage.mjs';
 async function temp(t) { const dir=await fs.mkdtemp(path.join(os.tmpdir(),'forge-test-')); const cleanup=[]; t.after(async () => { for (const task of cleanup) await task(); await fs.rm(dir,{ recursive:true,force:true }); }); return { dir,cleanup }; }
 const sleep=ms => new Promise(r => setTimeout(r,ms));
 async function wait(predicate) { const end=Date.now()+5000; while (!await predicate()) { if (Date.now()>end) throw new Error('Timed out'); await sleep(10); } }
@@ -30,6 +31,25 @@ test('v1 chats migrate to individual files; notes, archives and selected session
 test('corrupt chat files are reported and never overwritten by normal saves',async t => {
   const { dir }=await temp(t); let store=await openStore(dir); store.state.sessions.push({ id:'broken',title:'Broken',messages:[] }); await store.save();
   const file=path.join(store.state.settings.sessionDir,'broken.json'); await fs.writeFile(file,'broken JSON'); store=await openStore(dir); assert.equal(store.warnings.length,1); await store.save(); assert.equal(await fs.readFile(file,'utf8'),'broken JSON');
+});
+
+test('redirected storage survives EXDEV saves and recovers interrupted index/chat copies',async t => {
+  const { dir }=await temp(t);
+  t.mock.method(fs,'rename',async () => { throw Object.assign(new Error('Cross-device rename'),{ code:'EXDEV' }); });
+  let store=await openStore(dir); store.state.sessions.push({ id:'recoverable',title:'Saved',messages:[{ role:'user',content:'Keep this message' }] }); await store.save();
+  const index=path.join(store.dataDir,'state.json'); const chat=path.join(store.state.settings.sessionDir,'recoverable.json');
+  await fs.access(`${index}.recovery`); await fs.access(`${chat}.recovery`);
+  await fs.writeFile(index,'interrupted copy'); await fs.writeFile(chat,'interrupted copy');
+  store=await openStore(dir); assert.equal(store.state.sessions[0].messages[0].content,'Keep this message'); assert.equal(store.warnings.length,2);
+  assert.ok((await fs.readdir(store.dataDir)).some(n => n.startsWith('state.json.corrupt-')));
+  assert.ok((await fs.readdir(store.state.settings.sessionDir)).some(n => n.startsWith('recoverable.json.corrupt-')));
+  await store.deleteSession('recoverable'); await assert.rejects(() => fs.access(`${chat}.recovery`));
+});
+
+test('storage does not hide permission errors as cross-device saves',async t => {
+  const { dir }=await temp(t); const file=path.join(dir,'settings.json'); await fs.writeFile(file,'{"original":true}');
+  t.mock.method(fs,'rename',async () => { throw Object.assign(new Error('Denied'),{ code:'EACCES' }); });
+  await assert.rejects(() => atomicJson(file,'{"replacement":true}'),{ code:'EACCES' }); assert.equal(JSON.parse(await fs.readFile(file)).original,true);
 });
 test('runtime modes plan CPU, full GPU and hybrid with headroom guards',() => {
   const model={ bytes:6*1024**3,layers:40 }; const device={ freeGiB:12,gpu:{ freeGiB:8 } }; const base={ contextSize:2048,gpuLayers:16,kvOnGpu:false,reserveRamGiB:2 };

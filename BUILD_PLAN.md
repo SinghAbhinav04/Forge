@@ -39,7 +39,7 @@ Hardware scripts use local test assets and write results to ignored `test-artifa
 2. Build the Windows installer and launch the packaged app. Check PDF extraction, settings and embedded resources from the archive.
 3. Commit only source, the lockfile, icons and documentation. Inspect ignored files; exclude `.data`, models, runtime binaries, projects, credentials and `dist`.
 4. Push main to `https://github.com/SinghAbhinav04/Forge.git`; inspect all six package jobs.
-5. Tag the matching package version (`v0.2.1`). The tag workflow publishes a GitHub release only after all platform packages pass their checks and build.
+5. Tag the matching package version (`v0.2.2`). The tag workflow publishes a GitHub release only after all platform packages pass their checks and build.
 6. Check package inventory/checksums. Verify installation, search integration, tray quit, persistence and model operation on actual target systems before claiming native feature certification.
 
 Windows unsigned NSIS, macOS unsigned DMG/ZIP, and Linux AppImage/deb are configured. Signing certificates, Apple notarization, auto-update delivery, rich Word/PDF editing/export, OCR and a built-in terminal/web browser remain future work. Training is causal text LoRA; generic vision/audio training and direct GGUF training are not implemented.
