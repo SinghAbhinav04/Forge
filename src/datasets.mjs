@@ -72,6 +72,10 @@ export async function extractDocument(file) {
   if (extension==='.pdf') {
     if (!globalThis.DOMMatrix) { const module=await import('@thednp/dommatrix'); globalThis.DOMMatrix=module.default || module.DOMMatrix; }
     const pdf=await import('pdfjs-dist/legacy/build/pdf.mjs');
+    // Electron utility processes have Node APIs but PDF.js detects them as a browser.
+    // Load the trusted local worker module explicitly, including from app.asar.
+    globalThis.pdfjsWorker ||= await import('pdfjs-dist/legacy/build/pdf.worker.mjs');
+    pdf.GlobalWorkerOptions.workerSrc=import.meta.resolve('pdfjs-dist/legacy/build/pdf.worker.mjs');
     const task=pdf.getDocument({ data:new Uint8Array(await fs.readFile(file)),isEvalSupported:false,disableFontFace:true,useSystemFonts:true });
     let document;
     try { document=await task.promise; const pages=[]; for (let page=1;page<=document.numPages;page++) { if (page>1000) throw new Error('Split PDFs longer than 1,000 pages before importing.'); const content=await (await document.getPage(page)).getTextContent(); pages.push(content.items.map(item => item.str+(item.hasEOL ? '\n' : ' ')).join('')); } return pages.join('\n\n'); }

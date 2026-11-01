@@ -67,6 +67,8 @@
       ]
     },
     "nsis": {
+      "packElevateHelper":false,
+      "perMachine":false,
       "oneClick": false,
       "allowToChangeInstallationDirectory":true,
       "createDesktopShortcut":true,

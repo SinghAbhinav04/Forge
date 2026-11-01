@@ -15,7 +15,7 @@ import { validateSettings } from '../src/settings.mjs';
 import { Downloads,searchModels } from '../src/hub.mjs';
 async function temp(t) { const dir=await fs.mkdtemp(path.join(os.tmpdir(),'forge-test-')); const cleanup=[]; t.after(async () => { for (const task of cleanup) await task(); await fs.rm(dir,{ recursive:true,force:true }); }); return { dir,cleanup }; }
 const sleep=ms => new Promise(r => setTimeout(r,ms));
-async function wait(predicate) { const end=Date.now()+5000; while (!predicate()) { if (Date.now()>end) throw new Error('Timed out'); await sleep(10); } }
+async function wait(predicate) { const end=Date.now()+5000; while (!await predicate()) { if (Date.now()>end) throw new Error('Timed out'); await sleep(10); } }
 test('v1 chats migrate to individual files; notes, archives and selected session survive a restart',async t => {
   const { dir }=await temp(t); const data=path.join(dir,'.data'); await fs.mkdir(data); const workspace=path.join(dir,'workspace'); await fs.mkdir(workspace);
   await fs.writeFile(path.join(data,'state.json'),JSON.stringify({ version:1,settings:{ modelDir:dir,threads:6,gpuLayers:16 },workspaces:[{ id:'workspace',path:workspace }],sessions:[{ id:'chat-1',title:'Existing',messages:[{ role:'user',content:'Remember this fact' }],memory:'Project note',archived:true }] }));
@@ -82,5 +82,5 @@ test('model downloads pause, resume with Range, and verify the final GGUF checks
     return new Response(stream,{ status:offset ? 206 : 200,headers:offset ? { 'Content-Range':`bytes ${offset}-${data.length-1}/${data.length}` } : {} });
   };
   const downloads=new Downloads(store); cleanup.push(async () => { await downloads.close(); globalThis.fetch=originalFetch; });
-  assert.equal((await searchModels('test'))[0].id,'owner/model'); const job=await downloads.create('owner/model','model.gguf'); await wait(() => downloads.jobs.get(job.id).received>0); await downloads.control(job.id,'pause'); assert.equal(downloads.jobs.get(job.id).status,'paused'); await downloads.control(job.id,'resume'); await wait(() => ['completed','error'].includes(downloads.jobs.get(job.id).status)); assert.equal(downloads.jobs.get(job.id).status,'completed',downloads.jobs.get(job.id).error); assert.equal(rangeSeen,true); assert.equal(createHash('sha256').update(await fs.readFile(downloads.jobs.get(job.id).destination)).digest('hex'),sha);
+  assert.equal((await searchModels('test'))[0].id,'owner/model'); const job=await downloads.create('owner/model','model.gguf'); await wait(async () => { try { return (await fs.stat(`${downloads.jobs.get(job.id).destination}.part`)).size>0; } catch { return false; } }); await downloads.control(job.id,'pause'); assert.equal(downloads.jobs.get(job.id).status,'paused'); await downloads.control(job.id,'resume'); await wait(() => ['completed','error'].includes(downloads.jobs.get(job.id).status)); assert.equal(downloads.jobs.get(job.id).status,'completed',downloads.jobs.get(job.id).error); assert.equal(rangeSeen,true); assert.equal(createHash('sha256').update(await fs.readFile(downloads.jobs.get(job.id).destination)).digest('hex'),sha);
 });

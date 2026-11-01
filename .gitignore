@@ -8,3 +8,5 @@ workspace/**
 !workspace/Welcome.md
 __pycache__/
 *.pyc
+.build-cache/
+.build-temp/
