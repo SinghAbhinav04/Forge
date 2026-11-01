@@ -11,8 +11,8 @@ export async function atomicJson(file,text) {
       // Redirected Windows profiles can expose adjacent paths on different volumes.
       // Complete a recovery copy before touching the primary file. If that copy is
       // interrupted the primary survives; if replacement is interrupted it recovers.
-      await fs.copyFile(temp,`${file}.recovery`);
-      await fs.copyFile(`${file}.recovery`,file);
+      await fs.writeFile(`${file}.recovery`,text,{ encoding:'utf8',mode:0o600 });
+      await fs.writeFile(file,text,{ encoding:'utf8',mode:0o600 });
     }
   } finally { await fs.rm(temp,{ force:true }); }
 }

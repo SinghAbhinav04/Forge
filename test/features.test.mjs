@@ -36,6 +36,7 @@ test('corrupt chat files are reported and never overwritten by normal saves',asy
 test('redirected storage survives EXDEV saves and recovers interrupted index/chat copies',async t => {
   const { dir }=await temp(t);
   t.mock.method(fs,'rename',async () => { throw Object.assign(new Error('Cross-device rename'),{ code:'EXDEV' }); });
+  const originalCopy=fs.copyFile; t.mock.method(fs,'copyFile',async (...args) => { if (!String(args[1]).includes('.corrupt-')) throw Object.assign(new Error('Redirected overwrite failed'),{ code:'UNKNOWN' }); return originalCopy(...args); });
   let store=await openStore(dir); store.state.sessions.push({ id:'recoverable',title:'Saved',messages:[{ role:'user',content:'Keep this message' }] }); await store.save();
   const index=path.join(store.dataDir,'state.json'); const chat=path.join(store.state.settings.sessionDir,'recoverable.json');
   await fs.access(`${index}.recovery`); await fs.access(`${chat}.recovery`);
