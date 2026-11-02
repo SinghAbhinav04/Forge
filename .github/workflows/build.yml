@@ -57,6 +57,12 @@ jobs:
       - name: Check training participant selection and data review
         if: matrix.platform == 'windows' && matrix.arch == 'x64'
         run: node scripts/smoke-dataset-review.mjs
+      - name: Check model conversion interface and cancellation
+        if: matrix.platform == 'windows' && matrix.arch == 'x64'
+        run: npm run test:conversion
+      - name: Check guided setup, attachments and queued chat
+        if: matrix.platform == 'windows' && matrix.arch == 'x64'
+        run: npm run test:journey
       - name: Check release tag matches package version
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash

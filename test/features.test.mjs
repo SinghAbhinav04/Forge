@@ -21,9 +21,10 @@ const sleep=ms => new Promise(r => setTimeout(r,ms));
 async function wait(predicate) { const end=Date.now()+5000; while (!await predicate()) { if (Date.now()>end) throw new Error('Timed out'); await sleep(10); } }
 test('v1 chats migrate to individual files; notes, archives and selected session survive a restart',async t => {
   const { dir }=await temp(t); const data=path.join(dir,'.data'); await fs.mkdir(data); const workspace=path.join(dir,'workspace'); await fs.mkdir(workspace);
-  await fs.writeFile(path.join(data,'state.json'),JSON.stringify({ version:1,settings:{ modelDir:dir,threads:6,gpuLayers:16 },workspaces:[{ id:'workspace',path:workspace }],sessions:[{ id:'chat-1',title:'Existing',messages:[{ role:'user',content:'Remember this fact' }],memory:'Project note',archived:true }] }));
+  await fs.writeFile(path.join(data,'state.json'),JSON.stringify({ version:1,settings:{ modelDir:dir,threads:6,gpuLayers:16,theme:'sand' },workspaces:[{ id:'workspace',path:workspace }],sessions:[{ id:'chat-1',title:'Existing',messages:[{ role:'user',content:'Remember this fact' }],memory:'Project note',archived:true }] }));
   const store=await openStore(dir); const chat=JSON.parse(await fs.readFile(path.join(data,'sessions','chats','chat-1.json'),'utf8'));
   assert.equal(chat.messages[0].content,'Remember this fact'); assert.equal(chat.memory,'Project note');
+  assert.equal(store.state.settings.theme,'light'); assert.equal(store.state.settings.fontSize,17);
   const index=JSON.parse(await fs.readFile(path.join(data,'state.json'),'utf8')); assert.equal(index.sessions[0].messages,undefined); assert.equal(store.state.settings.threads,2);
   store.state.selection={ workspaceId:'workspace',sessionId:'chat-1' }; await store.save();
   const reopened=await openStore(dir); assert.equal(reopened.state.sessions[0].archived,true); assert.equal(reopened.state.selection.sessionId,'chat-1');
@@ -65,7 +66,7 @@ test('runtime modes plan CPU, full GPU and hybrid with headroom guards',() => {
 test('advanced sampling and resource settings reject invalid values',async t => {
   const { dir }=await temp(t); const { state }=await openStore(dir); const current=state.settings;
   assert.equal(validateSettings({ topP:.9,executionMode:'gpu',runInBackground:false },current).topP,.9);
-  for (const input of [{ topP:2 },{ minP:-1 },{ seed:1.5 },{ microBatchSize:512,batchSize:16 },{ executionMode:'magic' },{ reserveRamGiB:0 },{ runInBackground:'yes' }]) assert.throws(() => validateSettings(input,current));
+  for (const input of [{ topP:2 },{ minP:-1 },{ seed:1.5 },{ microBatchSize:512,batchSize:16 },{ executionMode:'magic' },{ reserveRamGiB:0 },{ runInBackground:'yes' },{ theme:'midnight' },{ theme:'system' }]) assert.throws(() => validateSettings(input,current));
 });
 
 test('hybrid placement uses on-demand embeddings and available VRAM without reducing the RAM reserve',() => {

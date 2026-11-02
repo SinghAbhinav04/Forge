@@ -1,24 +1,24 @@
-Forge 0.2.7 adds reviewed chat-data preparation and reply-only LoRA training.
+Forge 0.3.0 makes local AI easier to set up and use, with guided model setup, a simpler workspace and improvements for long conversations.
 
-- **Choose whose replies to learn:** named chats ask for a participant instead of assigning roles by speaking order. Common WhatsApp Android/iOS TXT and Instagram message JSON exports are supported, including multiline messages and Unicode names. Group context retains the other participants' names.
-- **Original versus prepared samples:** compare source messages with normalized training examples and confirm the preview. Changing the participant or source invalidates confirmation; training verifies that the reviewed files have not changed.
-- **Reply-only learning:** other people's messages and earlier conversation turns provide context. Only the chosen person's final reply in each named-chat example contributes training loss. Existing canonical chats learn assistant replies only; plain documents retain text training. The selected model's chat tokenizer determines token boundaries, with explicit rejection of unsupported templates.
-- **Import transparency:** skipped media/notices, opening replies without context and unanswered final turns are reported. Base model weights remain unchanged; named LoRA storage, conversion, stacking and removal continue to work.
+### Getting started and models
 
-Also included from previous releases:
+- **Simpler model setup:** add local GGUF files, find a model, connect Ollama or convert a supported Hugging Face model folder to GGUF from one place. Conversion offers format and disk-space guidance, retains the original files and never overwrites an existing model.
+- **Automatic hardware selection:** choose an appropriate runtime and CPU or hybrid execution by default. Forge checks supported NVIDIA driver/GPU information, verifies CUDA runtime device detection and falls back to CPU when GPU use cannot be verified. Manual settings remain available. Other GPU builds may require manual setup.
+- **Fit and speed:** see download size and reported available memory before downloading, then check estimated model memory use after download. After a successful local response, model cards can show the generation speed reported by the runtime; speed is unknown until measured and varies by workload.
 
-- **Chat and Workspace tabs:** independent histories and prompts. Chat handles normal conversation; Workspace retains project files, agent tools and approvals. Existing sessions remain in Workspace.
-- **Per-chat system prompts:** edit instructions beside the composer or inherit the app default. Prompts persist with that chat and survive export/import.
-- **Background replies:** create/open other chats and prepare drafts while a reply continues in its original conversation. Return through View reply, or stop it from the generation banner. Text, image and prompt drafts stay with their own chats; pending write approvals are retained. One model request runs at a time.
-- **Image attachments and setup:** choose, paste or drop images before vision is configured. Set up the matching local projector through the composer; settings are saved per model. Actual Gemma image understanding was verified.
-- **Themes:** Forest, Daylight, Midnight, Ocean, Amethyst, Graphite, Sand and Follow system.
-- **Low-memory loading:** streamed weights plus on-demand large embeddings, including Windows. Automatic hybrid layer placement uses available RAM/VRAM while preserving the configured reserve. Actual Gemma hybrid loading/inference passed with low free RAM.
-- **Windows fixes:** the model folder picker opens directly, missing default folders are created, and redirected profile storage handles rename/copy failures with recovery-backed writes.
+### A smoother everyday workflow
 
-Forge also includes persistent local sessions/notes, GGUF CPU/GPU/hybrid inference, document tools, MCP, skills, local API/remote endpoints, local Whisper setup, and optional LoRA training/conversion/stacking.
+- **ChatGPT and Claude-inspired themes:** two coordinated styles with their own colors, font families and reading sizes.
+- **Easier navigation:** grouped settings, a streamlined training flow, an activity drawer and contextual information buttons explain features where they are used.
+- **More capable chat:** search conversations, copy replies and code, edit or retry in a copy, keep drafts between restarts, and queue one message while another is running. Attach local documents for questions with filename citations; remote providers receive any content sent to them.
+- **Reviewed workspace changes:** preview assistant file edits and use conflict-checked history and undo for applied changes.
 
-Download the package matching your operating system and CPU architecture. Installers contain the application features; models, native inference/voice runtimes and the optional Python training engine are configured separately on each computer. Training uses a supported local Hugging Face causal model, not a GGUF directly. Hardware memory, GPU drivers and model capabilities still determine what each device can run.
+### Performance and reliability
 
-Packages are currently unsigned. macOS distribution is not notarized; Windows SmartScreen and macOS may require source verification and an explicit per-app allowance. Linux AppImage operation depends on desktop/FUSE support. Windows ARM64 is cross-built. All platform packages run backend checks; the Windows x64 job also runs GUI regressions. Native macOS/Linux GPU/audio behavior has not been tested on physical machines in this development session.
+- Faster context preparation for long conversations, lazy loading of chat history, targeted saves, separate image storage, batched streaming updates and fewer unnecessary interface refreshes.
+- Better memory estimates, symlink-aware Hugging Face training weight checks, cached training tokenization and optional gradient checkpointing. Training can compare base and adapter responses using the same prompts.
+- Storage cleanup previews protect current datasets and the latest checkpoints. Runtime errors and low-memory warnings provide clearer guidance.
 
-See README.md and TRAINING.md for setup and supported data formats. VALIDATION.md records test scope and hardware observations. SHA256SUMS.txt contains package checksums.
+Memory estimates are not guarantees. GPU availability, model architecture, context size and other workloads affect actual operation. Generation speed is a past measurement, not a prediction. GGUF conversion and hardware-specific training support depend on the model and installed dependencies; see README.md and TRAINING.md for details. Indexed document retrieval is not included; document attachments use extracted excerpts.
+
+Download the package matching your operating system and architecture. Models and optional inference, voice and training tools are installed separately. Packages are unsigned and macOS builds are not notarized. Windows ARM64 is cross-built. The release workflow runs backend checks on all platforms and GUI regressions on Windows x64; this release has not been verified on every physical GPU. SHA256SUMS.txt contains package checksums.

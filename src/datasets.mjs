@@ -68,7 +68,15 @@ export function normalizeText(text) {
   return { rows,mode:'document text',warnings:['No reliable dialogue structure found. Imported as text for continued language training; question/answer pairs were not invented.'] };
 }
 function decode(buffer) { if (buffer[0]===0xff && buffer[1]===0xfe) return buffer.subarray(2).toString('utf16le'); if (buffer[0]===0xfe && buffer[1]===0xff) { const copy=Buffer.from(buffer.subarray(2)); copy.swap16(); return copy.toString('utf16le'); } try { return new TextDecoder('utf-8',{ fatal:true }).decode(buffer).replace(/^\uFEFF/,''); } catch { return new TextDecoder('windows-1252').decode(buffer); } }
+const extractionCache=new Map();
 export async function extractDocument(file) {
+  const info=await fs.stat(file); const key=`${file}:${info.dev}:${info.ino}:${info.size}:${info.mtimeMs}:${info.ctimeMs}`;
+  if(extractionCache.has(key)) return extractionCache.get(key);
+  const text=await extractDocumentUncached(file);
+  if(text.length<=2_000_000) { extractionCache.set(key,text); while(extractionCache.size>4)extractionCache.delete(extractionCache.keys().next().value); }
+  return text;
+}
+async function extractDocumentUncached(file) {
   const extension=path.extname(file).toLowerCase(); const info=await fs.stat(file); if (!info.isFile() || info.size>32*1024**2) throw new Error('Choose a document smaller than 32 MiB, or split/preprocess it first.');
   if (extension==='.pdf') {
     if (!globalThis.DOMMatrix) { const module=await import('@thednp/dommatrix'); globalThis.DOMMatrix=module.default || module.DOMMatrix; }

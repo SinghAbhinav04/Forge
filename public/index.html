@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Forge</title><link rel="icon" href="/icon.svg" type="image/svg+xml"><link rel="stylesheet" href="/styles.css"><link rel="stylesheet" href="/features.css"><link rel="stylesheet" href="/themes.css">
@@ -9,10 +9,11 @@
     <aside class="sidebar">
       <div class="brand"><img src="/icon.svg" alt="" width="32" height="32"><strong>forge<span class="version"> / 0.2</span></strong></div>
       <button id="new-session" class="new-session"><span>＋</span> New session <kbd>Ctrl/⌘ N</kbd></button>
-      <nav class="main-nav"><button data-view="chat" class="nav active"><span>◌</span> Chat</button><button data-view="workspace" class="nav"><span>▧</span> Workspace</button><button data-view="models" class="nav"><span>◈</span> Models <span id="model-count" class="count">0</span></button><button data-view="settings" class="nav"><span>⚙</span> Settings</button></nav>
+      <nav class="main-nav"><button data-view="chat" class="nav active"><span>◌</span> Chat</button><button data-view="workspace" class="nav"><span>▧</span> Projects</button><button data-view="models" class="nav"><span>◈</span> Models <span id="model-count" class="count">0</span></button><button data-view="settings" class="nav"><span>⚙</span> Settings</button></nav>
       <div class="section-label">PROJECTS <button id="add-workspace" title="Open a project folder" aria-label="Open a project folder">＋</button></div>
       <div id="workspaces" class="workspace-list"></div>
       <div class="section-label sessions-label">SESSIONS <span id="session-count"></span></div>
+      <label class="sr-only" for="search-chats">Search conversations</label><input id="search-chats" class="search-chats" type="search" placeholder="Search conversations" autocomplete="off">
       <div id="sessions" class="session-list"></div>
       <div class="sidebar-bottom"><div class="local-note"><span class="dot"></span> On your computer</div><button id="runtime-shortcut" class="runtime-shortcut"><span>◉</span><span><strong id="runtime-label">No model loaded</strong><small id="hardware-label">Local inference</small></span><span>↗</span></button></div>
     </aside>

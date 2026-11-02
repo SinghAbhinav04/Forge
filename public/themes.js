@@ -1,6 +1,5 @@
 export const THEMES=[
- {id:'dark',name:'Forest',scheme:'dark'}, {id:'light',name:'Daylight',scheme:'light'},
- {id:'midnight',name:'Midnight',scheme:'dark'}, {id:'ocean',name:'Ocean',scheme:'dark'},
- {id:'amethyst',name:'Amethyst',scheme:'dark'}, {id:'graphite',name:'Graphite',scheme:'dark'},
- {id:'sand',name:'Sand',scheme:'light'}, {id:'system',name:'Follow system',scheme:'system'}
+ {id:'dark',name:'ChatGPT',scheme:'dark',fontSize:16,description:'Clean sans-serif · 16 px · soft white on charcoal.'},
+ {id:'light',name:'Claude',scheme:'light',fontSize:17,description:'Warm serif · 17 px · dark ink on paper.'}
 ];
+export const normalizeTheme=theme => ['light','sand'].includes(theme) ? 'light' : 'dark';

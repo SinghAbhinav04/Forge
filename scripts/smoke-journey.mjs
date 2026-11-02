@@ -1,0 +1,34 @@
+import { _electron as electron } from 'playwright';
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import http from 'node:http';
+
+await fs.mkdir(path.resolve('test-artifacts'),{recursive:true});const root=await fs.mkdtemp(path.resolve('test-artifacts/journey-'));
+const env={...process.env,LOCAL_DESK_TEST_ROOT:root};delete env.ELECTRON_RUN_AS_NODE;let release;const requests=[];
+const remote=http.createServer(async(req,res)=>{
+ if(req.url==='/v1/models'){res.setHeader('Content-Type','application/json');res.end(JSON.stringify({data:[{id:'journey-fixture'}]}));return;}
+ const chunks=[];for await(const chunk of req)chunks.push(chunk);const body=JSON.parse(Buffer.concat(chunks));requests.push(body);const last=body.messages.at(-1).content;
+ res.writeHead(200,{'Content-Type':'text/event-stream'});
+ const frame=(content,finish)=>res.write(`data: ${JSON.stringify({choices:[{delta:content?{content}:{},...(finish?{finish_reason:'stop'}:{})}]})}\n\n`);
+ if(typeof last==='string' && last.includes('slow first')){frame('First reply started.');await new Promise(resolve=>release=resolve);frame(' First reply finished.');}
+ else frame('The attached notes say blue.');
+ frame('',true);res.end('data: [DONE]\n\n');
+});await new Promise(resolve=>remote.listen(0,'127.0.0.1',resolve));
+let app,page;const errors=[];
+async function launch(){app=await electron.launch({args:['.'],env,timeout:60000});page=await app.firstWindow();page.on('pageerror',error=>errors.push(error.message));await page.waitForFunction(()=>document.getElementById('hardware-label')?.textContent.includes('GB RAM'));}
+const api=(route,body,method=body===undefined?'GET':'POST')=>page.evaluate(async([route,body,method])=>{const r=await fetch(route,{method,headers:{'Content-Type':'application/json','X-Local-Desk-Token':sessionStorage.getItem('local-desk-token')},...(body===undefined?{}:{body:JSON.stringify(body)})});const value=await r.json();if(!r.ok)throw new Error(value.error);return value;},[route,body,method]);
+try{
+ await launch();await page.locator('[data-view=models]').click();await page.locator('#getting-started').waitFor();if(!(await api('/api/bootstrap')).models.length)assert.equal(await page.locator('#getting-started').evaluate(e=>e.open),true);assert.equal(await page.locator('.setup-choices button').count(),4);
+ const a=await api('/api/sessions',{kind:'chat'}),b=await api('/api/sessions',{kind:'chat'});await api('/api/session/update',{id:a.id,title:'First'});await api('/api/session/update',{id:b.id,title:'Second'});
+ const devices=await api('/api/connections',{name:'Local fixture',base:`http://127.0.0.1:${remote.address().port}/v1`,key:''});await api('/api/connections/use',{id:devices.at(-1).id,model:'journey-fixture'});await api('/api/session/select',{sessionId:a.id,view:'chat'});await page.reload();await page.waitForFunction(()=>document.getElementById('page-title').textContent==='First');
+ await page.locator('#prompt').fill('Run the slow first reply.');await page.locator('#send').click();await page.getByText('First reply started.',{exact:false}).waitFor();await page.locator('#sessions').getByText('Second',{exact:true}).click();
+ await page.locator('#document-input').setInputFiles({name:'notes.txt',mimeType:'text/plain',buffer:Buffer.from('The lighthouse is blue.')});await page.locator('.document-chip').waitFor();await page.locator('#prompt').fill('What do the notes say?');await page.locator('#queue-message').click();await page.waitForFunction(()=>!document.getElementById('queue-banner').hidden);release();
+ await page.waitForFunction(()=>document.getElementById('messages').textContent.includes('The attached notes say blue.')&&document.getElementById('queue-banner').hidden,null,{timeout:20000});
+ assert.ok(requests.some(body=>JSON.stringify(body.messages).includes('Attached document notes.txt')));assert.ok((await api('/api/session?id='+b.id)).messages.some(m=>m.documents?.[0]?.name==='notes.txt'));
+ await page.locator('#messages .message.user').last().getByRole('button',{name:'Edit in copy'}).click();await page.waitForFunction(()=>document.getElementById('page-title').textContent.includes('(copy)') && document.getElementById('prompt').value==='What do the notes say?');assert.equal(await page.locator('.document-chip').count(),1);
+ await Promise.all([page.waitForResponse(r=>new URL(r.url()).pathname==='/api/drafts' && r.request().method()==='POST' && r.request().postDataJSON()?.draft?.text==='A draft that must survive restart.' && r.ok()),page.locator('#prompt').fill('A draft that must survive restart.')]);const selected=(await api('/api/bootstrap')).selection.sessionId;await page.waitForFunction(async id=>{const r=await fetch('/api/drafts',{headers:{'X-Local-Desk-Token':sessionStorage.getItem('local-desk-token')}});return (await r.json())[id]?.text==='A draft that must survive restart.';},selected);
+ await page.locator('[data-view=settings]').click();await page.locator('#panel-general .help-button').first().hover();await page.waitForFunction(()=>!document.getElementById('forge-help-tooltip').hidden);assert.ok((await page.locator('#forge-help-tooltip').textContent()).length>25);await page.screenshot({path:path.resolve('test-artifacts/forge-journey-help.png')});
+ await page.locator('[data-view=chat]').click();await page.locator('#prompt').fill('Draft saved immediately on quit.');await app.close();app=null;assert.equal(JSON.parse(await fs.readFile(path.join(root,'data','drafts',`${encodeURIComponent(selected)}.json`),'utf8')).text,'Draft saved immediately on quit.');await launch();assert.equal(await page.locator('#prompt').inputValue(),'Draft saved immediately on quit.');assert.equal(await page.locator('.document-chip').count(),1);assert.deepEqual(errors,[]);
+ console.log('Journey passed: model setup, local attachments, queued messages, edit-in-copy, durable drafts, and contextual help.');
+}finally{release?.();if(app)await app.close();remote.closeAllConnections();await new Promise(resolve=>remote.close(resolve));}

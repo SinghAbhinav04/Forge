@@ -4,7 +4,7 @@ const output=path.resolve('test-artifacts'); await fs.mkdir(output,{recursive:tr
 const file=path.join(root,'whatsapp.txt'); await fs.writeFile(file,'01/11/2026, 8:01 pm - Abhinav: Opening\n01/11/2026, 8:02 pm - Rahul: Free tonight?\n01/11/2026, 8:03 pm - Abhinav: After eight.\n01/11/2026, 8:04 pm - Rahul: Great!');
 let app; const errors=[];
 try {
- app=await electron.launch({args:['.'],env,timeout:60000}); const page=await app.firstWindow(); page.on('pageerror',e=>errors.push(e.message)); await page.locator('[data-view=trainer]').click();
+ app=await electron.launch({args:['.'],env,timeout:60000}); const page=await app.firstWindow(); page.on('pageerror',e=>errors.push(e.message)); await page.locator('.tools-nav > summary').click(); await page.locator('[data-view=trainer]').click();
  await page.locator('#train-dataset').fill(file); assert.equal(await page.locator('#training-start').isDisabled(),true); await page.locator('#dataset-detect').click(); await page.locator('#dataset-speaker').waitFor(); assert.equal(await page.locator('#dataset-speaker').inputValue(),'');
  await page.locator('#dataset-speaker').selectOption('Abhinav'); await page.locator('#dataset-confirm').waitFor(); assert.equal(await page.locator('#training-start').isDisabled(),true);
  const sample=await page.locator('#dataset-samples').textContent(); assert.ok(sample.includes('8:02 pm')); assert.ok(sample.includes('Free tonight?')); assert.ok(sample.includes('After eight.')); assert.ok(sample.includes('target_last_reply')); await page.locator('#dataset-confirm').check(); assert.equal(await page.locator('#training-start').isEnabled(),true);

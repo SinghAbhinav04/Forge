@@ -10,7 +10,7 @@ The backend suite has 38 tests covering file confinement, stale-write protection
 
 `node scripts/smoke-chat.mjs` checks separate prompts/history/drafts, Workspace file reads and restart persistence with a local test endpoint.
 
-`node scripts/smoke-composer.mjs` checks creating/switching chats during a delayed live stream, background reply/reasoning isolation, per-chat prompts and image drafts, cancellation from another chat, pending approval restoration, seven distinct theme palettes and restart persistence. Both GUI regressions run in the Windows x64 release job. Backend checks and native package builds run on Windows/macOS/Linux x64 and ARM64 runners.
+`node scripts/smoke-composer.mjs` checks creating/switching chats during a delayed live stream, background reply/reasoning isolation, per-chat prompts and image drafts, cancellation from another chat, pending approval restoration, the two ChatGPT/Claude theme styles and typography, and restart persistence. Both GUI regressions run in the Windows x64 release job. Backend checks and native package builds run on Windows/macOS/Linux x64 and ARM64 runners.
 
 Packaged Windows verification covers native launch, embedded resources, PDF/Word extraction, settings and background closing. Native macOS/Linux GPU/audio behavior still requires target-device testing; successful package builds do not establish universal hardware compatibility.
 

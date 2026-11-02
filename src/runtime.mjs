@@ -5,7 +5,7 @@ import { spawn,execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import os from 'node:os';
-import { hardware, ggufMetadata, chooseMemoryPlan } from './hardware.mjs';
+import { hardware, ggufMetadata, chooseMemoryPlan, runtimeGpuMemory } from './hardware.mjs';
 
 export async function scanModels(directory) {
   const models = [];
@@ -13,7 +13,7 @@ export async function scanModels(directory) {
     for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
       if (entry.isSymbolicLink()) continue;
       const file = path.join(dir, entry.name);
-      if (entry.isDirectory() && depth < 2) await visit(file, depth + 1);
+      if (entry.isDirectory() && depth < 2 && !entry.name.startsWith('.forge-convert-')) await visit(file, depth + 1);
       else if (entry.isFile() && /\.gguf$/i.test(entry.name) && !/mmproj/i.test(entry.name) && !/-0*(?:[2-9]|[1-9]\d+)-of-\d+\.gguf$/i.test(entry.name)) {
         const info = await fs.stat(file);
         models.push({ path: file, name: entry.name.replace(/\.gguf$/i, ''), bytes: info.size });
@@ -60,9 +60,28 @@ export class Runtime {
     if (!result) throw new Error('llama-server is not installed. Run npm run setup:runtime, or select your llama-server executable in Settings.');
     return result;
   }
+  async resolveExecution(settings) {
+    if(settings.executionMode!=='auto') return settings;
+    let devices=[]; try { devices=await this.devices(settings); } catch { /* CPU is the safe fallback when device discovery is unavailable. */ }
+    return {...settings,executionMode:devices.length ? 'hybrid' : 'cpu'};
+  }
+  async hardware(settings,{fresh=false}={}) {
+    const device=await hardware({fresh});
+    if(!device.gpu && !device.unifiedMemory && settings.executionMode!=='cpu')try{device.gpu=runtimeGpuMemory(await this.devices(settings));}catch{}
+    return device;
+  }
+  async planModel(model,settings,{fresh=false}={}) {
+    const automatic=settings.executionMode==='auto'; const resolved=await this.resolveExecution(settings);
+    const device=await this.hardware(resolved,{fresh});
+    if(automatic && resolved.executionMode==='hybrid' && !device.gpu && !device.unifiedMemory) resolved.executionMode='cpu';
+    let plan=chooseMemoryPlan(model,resolved,device);
+    if(automatic && plan.mode==='hybrid' && plan.errors.length){const cpu=chooseMemoryPlan(model,{...resolved,executionMode:'cpu'},device);if(!cpu.errors.length)plan={...cpu,automaticReason:'GPU memory estimate did not fit; using CPU.'};}
+    return plan;
+  }
   async load(model, settings) {
     if (this.busy || this.status === 'loading' || this.status === 'stopping') throw new Error('Stop the active task before changing models.');
     const executable = await this.executable(settings);
+    const requestedSettings=settings; settings=await this.resolveExecution(settings);
     if ((settings.executionMode || (settings.gpuLayers>0 ? 'hybrid' : 'cpu'))!=='cpu' && !(await this.devices(settings)).length) throw new Error('The selected runtime has no usable GPU device. Install/select a Vulkan, CUDA or Metal runtime, or switch execution to CPU/RAM.');
     const handle = await fs.open(model.path, 'r');
     try { const magic = Buffer.alloc(4); await handle.read(magic, 0, 4, 0); if (magic.toString() !== 'GGUF') throw new Error('The selected file is not a GGUF model.'); }
@@ -72,7 +91,7 @@ export class Runtime {
     let projectorBytes=0; if (settings.projectorPath) { if (!path.isAbsolute(settings.projectorPath) || !/\.gguf$/i.test(settings.projectorPath)) throw new Error('Select an absolute path to a matching GGUF vision projector.'); const projector=await fs.open(settings.projectorPath,'r'); try { const magic=Buffer.alloc(4); await projector.read(magic,0,4,0); if (magic.toString()!=='GGUF') throw new Error('Projector is not GGUF.'); projectorBytes=(await projector.stat()).size; } finally { await projector.close(); } }
     this.configuration={ contextSize:settings.contextSize,imageTokens:settings.imageTokens || 1120,projectorPath:settings.projectorPath || '',vision:Boolean(settings.projectorPath) };
     this.sampling=Object.fromEntries(['temperature','maxTokens','topP','topK','minP','repeatPenalty','seed'].filter(key => settings[key]!==undefined).map(key => [key,settings[key]]));
-    this.plan=chooseMemoryPlan(model,{ ...settings,projectorBytes },await hardware({ fresh:true }));
+    this.plan=await this.planModel(model,{ ...requestedSettings,projectorBytes },{fresh:true});
     if (this.plan.errors.length) throw new Error(this.plan.errors.join('\n'));
     this.status = 'loading'; this.error = ''; this.logs = []; this.model = model;
     this.started=Date.now(); this.phase='Starting inference process'; this.offloadEvidence=[];
@@ -107,10 +126,16 @@ export class Runtime {
   async waitReady(child) {
     const deadline = Date.now() + 5 * 60_000;
     while (this.child === child && this.status === 'loading' && Date.now() < deadline) {
+      let ready=false;
       try {
         const result = await fetch(`http://127.0.0.1:${this.port}/v1/models`, { headers: { Authorization: `Bearer ${this.key}` }, signal: AbortSignal.timeout(2000) });
-        if (result.ok && (await result.json()).data?.length) { if (this.child===child && this.status==='loading') { if (this.loadedAdapters?.length) { const apply=await fetch(`http://127.0.0.1:${this.port}/lora-adapters`,{ method:'POST',headers:{ 'Content-Type':'application/json',Authorization:`Bearer ${this.key}` },body:JSON.stringify(this.loadedAdapters.map((a,id) => ({ id,scale:a.scale }))),signal:AbortSignal.timeout(5000) }); if (!apply.ok) throw new Error('Could not activate LoRA stack.'); } this.status='ready'; this.phase='Ready'; clearInterval(this.memoryTimer); } return; }
+        ready=Boolean(result.ok && (await result.json()).data?.length);
       } catch { /* Loading is expected to take time. */ }
+      if(ready && this.child===child && this.status==='loading') {
+        try { if(this.loadedAdapters?.length) { const apply=await fetch(`http://127.0.0.1:${this.port}/lora-adapters`,{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${this.key}`},body:JSON.stringify(this.loadedAdapters.map((a,id)=>({id,scale:a.scale}))),signal:AbortSignal.timeout(5000)});if(!apply.ok)throw new Error(`The model could not activate its LoRA adapters (${apply.status}). Check the adapter and base model.`); } }
+        catch(error){await this.stop();this.status='error';this.error=error.message;return;}
+        if(this.child===child && this.status==='loading'){this.status='ready';this.phase='Ready';clearInterval(this.memoryTimer);}return;
+      }
       await delay(800);
     }
     if (this.child === child && this.status === 'loading') { await this.stop(); this.status = 'error'; this.error = 'Model loading timed out after five minutes. Check runtime logs.'; }
@@ -162,9 +187,9 @@ export class Runtime {
     } catch {}
     return builds;
   }
-  async applyAdapterStack(items) {
+  async applyAdapterStack(items,{allowBusy=false}={}) {
     if (this.status!=='ready' || this.remote) return { reloadRequired:true };
-    if (this.busy) throw new Error('Stop the active request before changing adapters.');
+    if (this.busy && !allowBusy) throw new Error('Stop the active request before changing adapters.');
     if (items.some(item => !this.loadedAdapters?.some(a => a.id===item.id))) return { reloadRequired:true };
     const scales=(this.loadedAdapters || []).map((a,id) => ({ id,scale:items.find(i => i.id===a.id)?.scale || 0 }));
     const response=await fetch(`http://127.0.0.1:${this.port}/lora-adapters`,{ method:'POST',headers:{ 'Content-Type':'application/json',Authorization:`Bearer ${this.key}` },body:JSON.stringify(scales),signal:AbortSignal.timeout(10000) });

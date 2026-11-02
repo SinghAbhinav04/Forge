@@ -108,6 +108,9 @@ test('vision attachments reach the model as image content and persist in the cha
   const user=f.requests[0].messages.find(m => m.role==='user'); assert.equal(user.content[1].image_url.url,image.url);
   const reopened=await openStore(f.store.appRoot || path.dirname(f.store.dataDir),f.store.dataDir);
   assert.equal(reopened.state.sessions[0].messages[0].images[0].url,image.url);
+  const saved=JSON.parse(await fs.readFile(path.join(f.store.state.settings.sessionDir,`${f.session.id}.json`),'utf8'));
+  assert.equal(saved.messages[0].images[0].url,undefined);
+  assert.match(saved.messages[0].images[0].ref,/^[a-f0-9]{64}\.png$/);
   for (const input of [[null],[{ url:'https://example.com/image.png' }],[{ url:'data:image/svg+xml;base64,PHN2Zz4=' }],[image,image,image]]) assert.throws(() => validateImages(input));
 });
 

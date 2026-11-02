@@ -8,6 +8,7 @@ export const trainingPython = dataDir => path.join(dataDir,'training-env',proces
 const run = (command,args,options={}) => new Promise((resolve,reject) => execFile(command,args,{ windowsHide:true,timeout:20000,...options },(error,stdout) => error ? reject(error) : resolve(stdout)));
 const externalScript=(root,name) => path.join(root.endsWith('.asar') ? `${root}.unpacked` : root,'scripts',name);
 const killTree=child => { if (!child?.pid) return; if (process.platform==='win32') execFile('taskkill',['/pid',String(child.pid),'/T','/F'],{ windowsHide:true },() => {}); else { try { process.kill(-child.pid,'SIGTERM'); } catch { child.kill(); } } };
+export async function modelWeightBytes(folder) {let bytes=0;for(const f of await fs.readdir(folder,{withFileTypes:true}))if((f.isFile() || f.isSymbolicLink()) && /\.(?:safetensors|bin)$/.test(f.name)){const info=await fs.stat(path.join(folder,f.name));if(info.isFile())bytes+=info.size;}return bytes;}
 export async function trainingEnvironment(dataDir) {
   const python=trainingPython(dataDir);
   try { return { installed:true,python,...JSON.parse(await run(python,['-c','import torch,transformers,peft; import json; print(json.dumps({"torch":torch.__version__,"cuda":torch.cuda.is_available(),"mps":bool(hasattr(torch.backends,"mps") and torch.backends.mps.is_available())}))'])) }; }
@@ -33,12 +34,16 @@ export class Trainer {
     const env=await trainingEnvironment(this.store.dataDir); if (!env.installed) throw new Error('Install the optional training engine first.');
     if (typeof input.baseModel!=='string' || !path.isAbsolute(input.baseModel) || /\.gguf$/i.test(input.baseModel)) throw new Error('Choose a local Hugging Face model folder, not a GGUF file. Training produces a LoRA adapter.');
     await fs.access(path.join(input.baseModel,'config.json'));
-    const config={ baseModel:input.baseModel,dataset:imported.path,datasetSource:input.dataset,datasetMode:imported.mode,datasetExamples:imported.examples,selectedSpeaker:imported.selectedSpeaker,lossMode:imported.lossMode,device:input.device || 'cpu' };
+    const device=!input.device || input.device==='auto' ? env.cuda ? 'cuda' : env.mps ? 'mps' : 'cpu' : input.device;
+    const config={ baseModel:input.baseModel,dataset:imported.path,datasetSource:input.dataset,datasetMode:imported.mode,datasetExamples:imported.examples,selectedSpeaker:imported.selectedSpeaker,lossMode:imported.lossMode,device };
+    if(input.gradientCheckpointing!==undefined && typeof input.gradientCheckpointing!=='boolean') throw new Error('Invalid gradient checkpointing setting.');
+    config.gradientCheckpointing=input.gradientCheckpointing===true;
     for (const [key,defaultValue,min,max,integer] of [['epochs',1,0.1,20,false],['learningRate',0.0002,0.000001,0.1,false],['batchSize',1,1,4,true],['gradientAccumulation',4,1,32,true],['maxLength',256,32,2048,true],['loraRank',8,2,64,true],['saveEvery',10,1,1000,true],['maxSteps',100,1,100000,true]]) { const v=input[key] ?? defaultValue; if (typeof v!=='number' || !Number.isFinite(v) || v<min || v>max || (integer && !Number.isInteger(v))) throw new Error(`Invalid training ${key}.`); config[key]=v; }
     if (!['cpu','cuda','mps'].includes(config.device)) throw new Error('Select CPU, CUDA or Apple Metal.');
     if (config.device==='cuda' && !env.cuda) throw new Error('The training engine has no CUDA support. Use CPU, or install a CUDA-enabled PyTorch build into the displayed training environment.');
     if (config.device==='mps' && !env.mps) throw new Error('Apple Metal training is unavailable in this environment.');
-    let bytes=0; for (const f of await fs.readdir(input.baseModel,{ withFileTypes:true })) if (f.isFile() && /\.(?:safetensors|bin)$/.test(f.name)) bytes+=(await fs.stat(path.join(input.baseModel,f.name))).size;
+    const bytes=await modelWeightBytes(input.baseModel);
+    if (!bytes) throw new Error('The model folder has no readable Hugging Face weights.');
     const free=os.freemem(); if (free<bytes*2+2*1024**3) throw new Error('Not enough free system RAM for this base model. Use a smaller model or close other model apps.');
     const id=randomUUID(); const output=path.join(this.store.dataDir,'training',id); await fs.mkdir(output,{ recursive:true });
     this.job={ id,name:typeof input.name==='string' ? input.name.slice(0,80) : 'Untitled LoRA',status:'running',created:Date.now(),config,output,step:0,checkpoint:null }; this.logs=[]; await this.persist(); await this.launch(false); return this.snapshot();

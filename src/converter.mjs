@@ -1,26 +1,54 @@
 import fs from 'node:fs/promises';
 import { createWriteStream } from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { spawn } from 'node:child_process';
 import { pipeline } from 'node:stream/promises';
 import { Readable } from 'node:stream';
 import { trainingPython } from './trainer.mjs';
-const command=(exe,args,{ signal,log=()=>{},env={} }={}) => new Promise((resolve,reject) => { const child=spawn(exe,args,{ windowsHide:true,signal,env:{ ...process.env,OMP_NUM_THREADS:'2',TOKENIZERS_PARALLELISM:'false',...env },stdio:['ignore','pipe','pipe'] }); let tail=''; for (const stream of [child.stdout,child.stderr]) stream.on('data',chunk => { tail=(tail+chunk).slice(-6000); log(String(chunk)); }); child.once('error',reject); child.once('exit',code => code===0 ? resolve() : reject(new Error(`Converter process failed (${code}): ${tail}`))); });
-let setupPromise;
-export async function ensureConverter(dataDir,{ signal,log=console.log }={}) {
+const command=(exe,args,{ signal,log=()=>{},env={},cwd }={}) => new Promise((resolve,reject) => {
+  if (signal?.aborted) { reject(signal.reason); return; }
+  const child=spawn(exe,args,{ cwd,windowsHide:true,detached:process.platform!=='win32',env:{ ...process.env,OMP_NUM_THREADS:'2',TOKENIZERS_PARALLELISM:'false',...env },stdio:['ignore','pipe','pipe'] });
+  let tail=''; let timer; let stopping=false;
+  const stop=() => {
+    if (!child.pid || stopping) return; stopping=true;
+    if (process.platform==='win32') { const killer=spawn('taskkill',['/pid',String(child.pid),'/T','/F'],{ windowsHide:true,stdio:'ignore' }); killer.on('error',() => child.kill()); }
+    else { try { process.kill(-child.pid,'SIGTERM'); } catch { child.kill(); } }
+    timer=setTimeout(() => { try { if (process.platform!=='win32') process.kill(-child.pid,'SIGKILL'); else child.kill('SIGKILL'); } catch {} },4000);
+  };
+  child.once('spawn',() => { try { os.setPriority(child.pid,os.constants.priority.PRIORITY_BELOW_NORMAL); } catch {} if (signal?.aborted) stop(); });
+  signal?.addEventListener('abort',stop,{ once:true });
+  for (const stream of [child.stdout,child.stderr]) stream.on('data',chunk => { tail=(tail+chunk).slice(-6000); log(String(chunk)); });
+  child.once('error',reject);
+  child.once('close',code => { clearTimeout(timer); signal?.removeEventListener('abort',stop); if (signal?.aborted) reject(signal.reason); else if (code===0) resolve(); else reject(new Error(`Converter process failed (${code}): ${tail}`)); });
+});
+const sourceTasks=new Map();
+const helperTasks=new Map();
+export async function ensureConverterSource(dataDir,{ signal,log=console.log }={}) {
   const root=path.join(dataDir,'converter'); const marker=path.join(root,'current.json');
-  try { const current=JSON.parse(await fs.readFile(marker,'utf8')); await fs.access(path.join(current.source,'convert_lora_to_gguf.py')); return current.source; } catch {}
-  if (setupPromise) return setupPromise;
-  setupPromise=(async () => {
+  try { const current=JSON.parse(await fs.readFile(marker,'utf8')); await fs.access(path.join(current.source,'convert_lora_to_gguf.py')); await fs.access(path.join(current.source,'convert_hf_to_gguf.py')); return current.source; } catch {}
+  if (sourceTasks.has(root)) return sourceTasks.get(root);
+  const task=(async () => {
     await fs.mkdir(root,{ recursive:true });
     const response=await fetch('https://api.github.com/repos/ggml-org/llama.cpp/commits/master',{ headers:{ 'User-Agent':'Forge/0.2' },signal }); if (!response.ok) throw new Error('Cannot resolve the official llama.cpp converter source.'); const commit=(await response.json()).sha; if (!/^[a-f0-9]{40}$/.test(commit)) throw new Error('Invalid converter source commit.');
     const archive=path.join(root,`${commit}.zip`); log(`Downloading official llama.cpp converter source at ${commit.slice(0,12)}…`);
     const sourceResponse=await fetch(`https://github.com/ggml-org/llama.cpp/archive/${commit}.zip`,{ signal }); if (!sourceResponse.ok) throw new Error(`Source download failed (${sourceResponse.status}).`); await pipeline(Readable.fromWeb(sourceResponse.body),createWriteStream(archive),{ signal });
     await command('tar',['-xf',archive,'-C',root],{ signal,log }); const source=path.join(root,`llama.cpp-${commit}`); await fs.access(path.join(source,'convert_lora_to_gguf.py'));
-    log('Installing converter helpers into the isolated training environment…'); await command(trainingPython(dataDir),['-m','pip','install','sentencepiece','protobuf','tiktoken','gguf'],{ signal,log });
     await fs.writeFile(marker,JSON.stringify({ source,commit },null,2)); return source;
-  })();
-  try { return await setupPromise; } finally { setupPromise=null; }
+  })(); sourceTasks.set(root,task);
+  try { return await task; } finally { sourceTasks.delete(root); }
+}
+export async function ensureConverter(dataDir,options={}) {
+  const source=await ensureConverterSource(dataDir,options);
+  const marker=path.join(dataDir,'converter','adapter-helpers.json');
+  try { if (JSON.parse(await fs.readFile(marker,'utf8')).source===source) return source; } catch {}
+  if (helperTasks.has(marker)) return helperTasks.get(marker);
+  const task=(async () => {
+    options.log?.('Installing converter helpers into the isolated training environment…');
+    await command(trainingPython(dataDir),['-m','pip','install','sentencepiece','protobuf','tiktoken','gguf'],options);
+    await fs.writeFile(marker,JSON.stringify({ source })); return source;
+  })(); helperTasks.set(marker,task);
+  try { return await task; } finally { helperTasks.delete(marker); }
 }
 export class AdapterConverter {
   constructor(store,library) { this.store=store; this.library=library; this.tasks=new Map(); }

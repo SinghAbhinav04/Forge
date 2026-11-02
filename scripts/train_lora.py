@@ -49,7 +49,7 @@ def encode_example(tokenizer, row, max_length):
 
 def encode_batch(tokenizer, rows, max_length):
     import torch
-    examples = [encode_example(tokenizer, row, max_length) for row in rows]
+    examples = [row if "input_ids" in row and "labels" in row else encode_example(tokenizer, row, max_length) for row in rows]
     width = max(len(example["input_ids"]) for example in examples)
     return {
         "input_ids": torch.tensor([e["input_ids"] + [tokenizer.pad_token_id]*(width-len(e["input_ids"])) for e in examples]),
@@ -87,15 +87,22 @@ def train(config):
     if not rows:
         raise ValueError("The training dataset is empty")
     # Validate reply boundaries before allocating the base model.
-    for row in rows:
-        encode_example(tokenizer, row, config["maxLength"])
-    model = AutoModelForCausalLM.from_pretrained(config["baseModel"], local_files_only=True, trust_remote_code=False, torch_dtype=torch.float32)
+    encoded_rows = [encode_example(tokenizer, row, config["maxLength"]) for row in rows]
+    dtype = torch.bfloat16 if device == "cuda" and torch.cuda.is_bf16_supported() else torch.float32
+    emit("info", message=f"Loading model using {dtype}")
+    model = AutoModelForCausalLM.from_pretrained(config["baseModel"], local_files_only=True, trust_remote_code=False, torch_dtype=dtype)
     checkpoint = None
     if config.get("resume"):
         checkpoint = json.loads((output / "latest.json").read_text())["path"]
         model = PeftModel.from_pretrained(model, checkpoint, is_trainable=True, local_files_only=True)
     else:
         model = get_peft_model(model, LoraConfig(task_type=TaskType.CAUSAL_LM, r=config["loraRank"], lora_alpha=config["loraRank"]*2, lora_dropout=0.05, target_modules="all-linear"))
+    if config.get("gradientCheckpointing"):
+        if not getattr(model, "supports_gradient_checkpointing", False):
+            raise ValueError("This model does not support gradient checkpointing. Turn it off in advanced training settings.")
+        model.gradient_checkpointing_enable()
+        if hasattr(model, "enable_input_require_grads"):
+            model.enable_input_require_grads()
     model.to(device)
     model.config.use_cache = False
     model.train()
@@ -127,7 +134,7 @@ def train(config):
         optimizer.zero_grad(set_to_none=True)
         loss_value = 0
         for micro in range(accumulation):
-            selected = [rows[((step*accumulation+micro)*batch+i) % len(rows)] for i in range(batch)]
+            selected = [encoded_rows[((step*accumulation+micro)*batch+i) % len(encoded_rows)] for i in range(batch)]
             encoded = encode_batch(tokenizer, selected, config["maxLength"])
             inputs = {key: encoded[key].to(device) for key in ["input_ids", "attention_mask"]}
             labels = encoded["labels"].to(device)

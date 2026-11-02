@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { readFile,listFiles } from './files.mjs';
 function parse(text,name) { const front=text.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/); const title=front?.[1].match(/^name:\s*["']?(.+?)["']?\s*$/m)?.[1]; const instructions=(front ? text.slice(front[0].length) : text).trim(); if (!instructions || instructions.length>64000) throw new Error('Skill instructions must contain between 1 and 64,000 characters.'); return { name:(title || name).slice(0,80),instructions }; }
 export class SkillLibrary {
-  constructor(store) { this.store=store; this.directory=path.join(store.dataDir,'skills'); }
+  constructor(store) { this.store=store; this.directory=path.join(store.dataDir,'skills'); this.revisions=new Map(); }
   async initialize() { await fs.mkdir(this.directory,{ recursive:true }); for (const skill of this.store.state.skills) { if (!skill.resourceDir) { skill.resourceDir=path.join(this.directory,skill.id); await fs.mkdir(skill.resourceDir,{ recursive:true }); await fs.writeFile(path.join(skill.resourceDir,'SKILL.md'),skill.instructions); } } }
   async save(input) {
     if (!input.name?.trim() || typeof input.instructions!=='string') throw new Error('Provide a skill name and instructions.'); const parsed=parse(input.instructions,input.name.trim()); const existing=this.store.state.skills.find(s => s.id===input.id); const id=existing?.id || randomUUID();
@@ -20,12 +20,16 @@ export class SkillLibrary {
   }
   async scan() {
     await fs.mkdir(this.directory,{ recursive:true });
+    let changed=false;
     for (const entry of await fs.readdir(this.directory,{ withFileTypes:true })) if (entry.isDirectory() && !entry.isSymbolicLink()) {
-      const directory=path.join(this.directory,entry.name); let text; try { text=(await readFile(directory,'SKILL.md')).content; } catch { continue; }
-      const found=this.store.state.skills.find(s => s.resourceDir===directory); let parsed; try { parsed=parse(text,found?.name || entry.name); } catch (error) { if (found) { found.enabled=false; found.error=error.message; } continue; }
-      if (found) Object.assign(found,parsed); else this.store.state.skills.push({ id:randomUUID(),...parsed,enabled:true,resourceDir:directory });
+      const directory=path.join(this.directory,entry.name); const found=this.store.state.skills.find(s => s.resourceDir===directory); let text,revision;
+      try { const info=await fs.lstat(path.join(directory,'SKILL.md')); revision=`${info.mtimeMs}:${info.ctimeMs}:${info.size}`; if(found && this.revisions.get(directory)===revision) continue; text=(await readFile(directory,'SKILL.md')).content; } catch { continue; }
+      let parsed; try { parsed=parse(text,found?.name || entry.name); } catch (error) { if (found && (found.enabled || found.error!==error.message)) { found.enabled=false; found.error=error.message; changed=true; } continue; }
+      if (found) { if(found.name!==parsed.name || found.instructions!==parsed.instructions || found.error) { Object.assign(found,parsed); delete found.error; changed=true; } }
+      else { this.store.state.skills.push({ id:randomUUID(),...parsed,enabled:true,resourceDir:directory }); changed=true; }
+      this.revisions.set(directory,revision);
     }
-    await this.store.save(); return this.store.state.skills;
+    if(changed) await this.store.save({sessionIds:[]}); return this.store.state.skills;
   }
   async remove(id) { const skill=this.store.state.skills.find(s => s.id===id); if (!skill) throw new Error('Skill not found.'); const relative=path.relative(this.directory,skill.resourceDir); if (relative && !relative.startsWith('..') && !path.isAbsolute(relative)) { const archive=path.join(this.store.dataDir,'skills-disabled'); await fs.mkdir(archive,{ recursive:true }); try { await fs.rename(skill.resourceDir,path.join(archive,`${skill.id}-${Date.now()}`)); } catch (e) { if (e.code!=='ENOENT') throw e; } } this.store.state.skills=this.store.state.skills.filter(s => s.id!==id); await this.store.save(); }
   async resource(name,file) { const skill=this.store.state.skills.find(s => s.enabled && (s.id===name || s.name===name)); if (!skill?.resourceDir) throw new Error('Enabled skill not found.'); return readFile(skill.resourceDir,file); }

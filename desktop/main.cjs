@@ -67,6 +67,8 @@ else {
   }).catch(error => { dialog.showErrorBox('Forge could not start',error.stack || error.message); quitting=true; app.quit(); });
   app.on('window-all-closed',() => { if (process.platform!=='darwin' || !settings.runInBackground) app.quit(); });
   app.on('before-quit', event => {
-    if (backend) { event.preventDefault(); quitting=true; const closing=backend; backend=null; closing.close().finally(() => app.quit()); }
+    if (backend) { event.preventDefault(); quitting=true; const closing=backend; backend=null;
+      const flushDrafts=()=>new Promise(resolve=>{if(!window || window.isDestroyed() || window.webContents.isDestroyed())return resolve();const id=require('node:crypto').randomUUID();let timer;const done=()=>{clearTimeout(timer);ipcMain.removeListener('drafts-flushed',listener);resolve();};const listener=(event,value)=>{try{if(event.sender===window?.webContents && new URL(event.senderFrame.url).origin===backendOrigin && value===id)done();}catch{}};ipcMain.on('drafts-flushed',listener);timer=setTimeout(done,3000);window.webContents.send('prepare-to-quit',id);});
+      flushDrafts().catch(()=>{}).then(()=>closing.close()).finally(() => app.quit()); }
   });
 }

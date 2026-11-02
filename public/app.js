@@ -1,9 +1,12 @@
 import { initFeatures } from './features.js';
+import { initHelp } from './help.js';
+import { initJourney } from './journey.js';
 const $ = id => document.getElementById(id);
 const node = (tag, className, text) => { const e = document.createElement(tag); if (className) e.className = className; if (text !== undefined) e.textContent = text; return e; };
 const token = location.hash.slice(1) || sessionStorage.getItem('local-desk-token') || '';
 if (token) { sessionStorage.setItem('local-desk-token', token); history.replaceState(null, '', location.pathname); }
-const state={ data:null,workspaceId:null,sessionId:null,view:'chat',scope:'chat',lastSessions:{chat:null,workspace:null},drafts:new Map(),sessionPrompt:null,navVersion:0,loadingSession:null,run:null,notices:new Map(),folder:'.',file:null,dirty:false,preview:false,sending:false,installing:false,filesVisible:innerWidth>=1000,images:[] };
+const state={ data:null,workspaceId:null,sessionId:null,view:'chat',scope:'chat',lastSessions:{chat:null,workspace:null},drafts:new Map(),sessionPrompt:null,navVersion:0,loadingSession:null,run:null,notices:new Map(),folder:'.',file:null,dirty:false,preview:false,sending:false,installing:false,filesVisible:innerWidth>=1000,images:[],documents:[] };
+let searchMatches=null; let searchTicket=0; let searchTimer; let modelRenderKey=''; let historyLimit=100; let streamFrame=0; const streamUpdates=new Map(); let queuedMessage=null; let queueStarting=false; let queueAdding=false; let queuePaused=false;
 const welcome = $('welcome');
 const setupHint = $('setup-hint');
 const workspaceIntro=node('div'); while(welcome.firstChild) workspaceIntro.append(welcome.firstChild);
@@ -11,8 +14,10 @@ const chatIntro=node('div'); chatIntro.innerHTML='<div class="eyebrow"><span cla
 welcome.append(chatIntro,workspaceIntro,setupHint); $('mode').hidden=true;
 const conversationType=node('span','conversation-type','Chat'); conversationType.id='conversation-type'; $('mode').before(conversationType);
 const generationBanner=node('div','generation-banner');generationBanner.id='generation-banner';generationBanner.hidden=true;const generationLabel=node('span');const viewGeneration=node('button','text-button','View reply');viewGeneration.id='view-generating';const stopGeneration=node('button','text-button','Stop');stopGeneration.id='stop-generating';generationBanner.append(generationLabel,viewGeneration,stopGeneration);document.querySelector('.topbar').after(generationBanner);
+const queueBanner=node('div','generation-banner');queueBanner.id='queue-banner';queueBanner.hidden=true;const queueLabel=node('span');const queueNow=node('button','text-button','Send queued');queueNow.type='button';const queueRemove=node('button','text-button','Remove');queueRemove.type='button';queueBanner.append(queueLabel,queueNow,queueRemove);generationBanner.after(queueBanner);
+const queueButton=node('button','secondary-button','Queue message');queueButton.id='queue-message';queueButton.type='button';queueButton.hidden=true;$('send').before(queueButton);
 viewGeneration.onclick=()=>{const id=state.run?.current?.id||state.data?.active;if(id)selectSession(id).catch(fail);};stopGeneration.onclick=()=>$('stop-task').click();
-let features;
+let features; let journey;
 let toastTimer;
 function toast(message, error = false) { $('toast').textContent = message; $('toast').classList.toggle('error', error); $('toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('toast').hidden = true; }, error ? 12000 : 4500); }
 function fail(error) { toast(error.message || String(error), true); }
@@ -28,8 +33,17 @@ const busy = () => state.sending || Boolean(state.data?.active) || Boolean(state
 const generatingId=()=>state.run?.current?.id||state.data?.active;
 const visibleRun=()=>Boolean(state.run?.current && state.run.current.id===state.sessionId && ['chat','workspace'].includes(state.view));
 const draftKey=()=>state.sessionId || `new:${state.scope}:${state.scope==='workspace'?state.workspaceId:''}`;
-function saveDraft(){state.drafts.set(draftKey(),{text:$('prompt').value,images:state.images,systemPrompt:state.sessionPrompt});}
-function loadDraft(){const d=state.drafts.get(draftKey());$('prompt').value=d?.text||'';state.images=d?.images||[];state.sessionPrompt=d?d.systemPrompt:session()?.systemPrompt??null;features?.renderImages();}
+const pendingDrafts=new Map(); let draftTimer; let draftQueue=Promise.resolve();
+function queueDraft(key,draft){pendingDrafts.set(key,draft);clearTimeout(draftTimer);draftTimer=setTimeout(flushDrafts,300);}
+function flushDrafts(){const pending=[...pendingDrafts];pendingDrafts.clear();draftQueue=draftQueue.then(async()=>{for(const [key,draft] of pending)try{await api('/api/drafts',{method:'POST',body:{key,draft}});}catch(error){if(!pendingDrafts.has(key))pendingDrafts.set(key,draft);toast(`Could not save draft: ${error.message}`,true);}});return draftQueue;}
+function saveDraft(){const key=draftKey();const draft={text:$('prompt').value,images:state.images,documents:state.documents,systemPrompt:state.sessionPrompt};state.drafts.set(key,draft);if(state.data)queueDraft(key,draft);}
+function deleteDraft(key){state.drafts.delete(key);if(state.data)queueDraft(key,null);}
+function renderQueue(){queueBanner.hidden=!queuedMessage;if(!queuedMessage)return;const name=state.data?.sessions.find(s=>s.id===queuedMessage.sessionId)?.title || 'conversation';queueLabel.textContent=`${queuePaused?'Paused':'Queued'} for “${name}”: ${queuedMessage.text.slice(0,100)}`;queueNow.hidden=!queuePaused || busy() || state.data?.runtime.status!=='ready';queueRemove.disabled=queueStarting;}
+queueRemove.onclick=async()=>{if(!queuedMessage)return;try{await api('/api/queue',{method:'POST',body:{clear:true,id:queuedMessage.id}});queuedMessage=null;queuePaused=false;renderQueue();renderRuntime();}catch(error){fail(error);}};
+queueNow.onclick=()=>{queuePaused=false;void startQueue();};
+async function startQueue(){if(queueStarting || queuePaused || !queuedMessage || busy() || state.data?.runtime.status!=='ready')return;queueStarting=true;renderQueue();const item=queuedMessage;try{await send({preventDefault(){}},item);}catch(error){queuePaused=true;fail(error);}finally{queueStarting=false;renderQueue();}}
+queueButton.onclick=async()=>{if(queuedMessage || queueAdding || !busy())return;const ticket=state.navVersion,scope=state.scope,workspaceId=state.workspaceId,oldKey=draftKey(),text=$('prompt').value.trim() || (state.images.length ? 'Describe the attached image.' : state.documents.length ? 'Summarize the attached files.' : ''),images=state.images,documents=state.documents,systemPrompt=state.sessionPrompt;if(!text)return;queueAdding=true;queueButton.disabled=true;try{let current=session();if(!current){current=await api('/api/sessions',{method:'POST',body:{kind:scope,workspaceId:scope==='workspace'?workspaceId:null,systemPrompt}});state.data.sessions.unshift(current);if(ticket===state.navVersion){state.sessionId=current.id;await rememberSelection();}}const result=await api('/api/queue',{method:'POST',body:{sessionId:current.id,text,images,documents}});queuedMessage=result.message;queuePaused=false;if(ticket===state.navVersion && state.sessionId===current.id){if(oldKey!==current.id)deleteDraft(oldKey);$('prompt').value='';state.images=[];state.documents=[];saveDraft();features.renderImages();features.renderDocuments();}renderQueue();renderSidebar();renderRuntime();toast('Message queued. It will send after the current reply.');}catch(error){fail(error);}finally{queueAdding=false;renderRuntime();if(queuedMessage && !busy())setTimeout(()=>void startQueue(),0);}};
+function loadDraft(){const d=state.drafts.get(draftKey());$('prompt').value=d?.text||'';state.images=d?.images||[];state.documents=d?.documents||[];state.sessionPrompt=d?d.systemPrompt:session()?.systemPrompt??null;features?.renderImages();features?.renderDocuments();}
 const clean = () => !state.dirty || confirm('Discard the unsaved changes in this document?');
 const shortModel = name => name?.replace(/-GGUF$/i, '') || 'No model loaded';
 
@@ -45,7 +59,7 @@ function markdown(text, target) {
   while (i < lines.length) {
     const line = lines[i];
     if (!line.trim()) { i++; continue; }
-    if (/^\s*```/.test(line)) { const code = []; i++; while (i < lines.length && !/^\s*```/.test(lines[i])) code.push(lines[i++]); i++; const pre = node('pre'); pre.append(node('code', '', code.join('\n'))); target.append(pre); continue; }
+    if (/^\s*```/.test(line)) { const code = []; i++; while (i < lines.length && !/^\s*```/.test(lines[i])) code.push(lines[i++]); i++; const pre = node('pre'); const copy=node('button','copy-code','Copy code');copy.type='button';copy.onclick=()=>navigator.clipboard.writeText(code.join('\n')).then(()=>toast('Code copied.')).catch(fail); pre.append(copy,node('code', '', code.join('\n'))); target.append(pre); continue; }
     const heading = line.match(/^(#{1,4})\s+(.+)/);
     if (heading) { const h = node(`h${heading[1].length}`); inline(heading[2], h); target.append(h); i++; continue; }
     if (/^\s*(?:[-*]|\d+\.)\s+/.test(line)) {
@@ -63,16 +77,18 @@ function markdown(text, target) {
 function showView(view) {
   if (['chat','workspace'].includes(view) && view!==state.scope) { void switchConversation(view).catch(fail); return; }
   state.view = view;
+  if(view==='trainer')document.querySelector('.tools-nav').open=true;
   for (const name of ['workspace','models','settings','trainer']) $(`${name}-view`).hidden=name==='workspace' ? !['chat','workspace'].includes(view) : name!==view;
   document.querySelectorAll('[data-view]').forEach(e => e.classList.toggle('active', e.dataset.view === view));
   $('page-title').textContent=['chat','workspace'].includes(view) ? session()?.title || (state.scope==='chat' ? 'New chat' : 'New workspace session') : view==='models' ? 'Model library' : view==='trainer' ? 'Trainer' : 'Settings';
   $('workspace-view').classList.toggle('chat-mode',state.scope==='chat'); chatIntro.hidden=state.scope!=='chat'; workspaceIntro.hidden=state.scope!=='workspace';
   $('mode').value=state.scope==='chat' ? 'chat' : 'agent'; conversationType.textContent=state.scope==='chat' ? 'Chat' : 'Workspace agent';
   $('prompt').placeholder=state.scope==='chat' ? 'Message Forge…' : 'What would you like to work on?';
-  document.querySelector('.composer-caption').firstElementChild.textContent=state.scope==='chat' ? 'Local inference · general conversation' : 'Local inference · writes need your review';
+  document.querySelector('.composer-caption').firstElementChild.textContent=state.data?.runtime.source==='remote' ? 'Remote model · messages are sent to the configured server' : state.scope==='chat' ? 'Local inference · general conversation' : 'Local inference · writes need your review';
   if (view === 'models') renderModels();
   if (view === 'settings') fillSettings();
   if (state.data) features?.render(state.data);
+  journey?.render(state.data);
   $('toggle-files').hidden = view !== 'workspace';
   renderEditor();
 }
@@ -94,16 +110,16 @@ function renderSidebar() {
     if (w.id === state.workspaceId) b.append(node('span', 'project-dot'));
     b.onclick = () => switchProject(w.id); $('workspaces').append(b);
   }
-  const sessions=state.data.sessions.filter(s => kind(s)===state.scope && (state.scope==='chat' || s.workspaceId===state.workspaceId) && !s.archived).sort((a,b) => b.updated-a.updated);
+  const sessions=state.data.sessions.filter(s => kind(s)===state.scope && (state.scope==='chat' || s.workspaceId===state.workspaceId) && !s.archived && (!searchMatches || searchMatches.has(s.id))).sort((a,b) => b.updated-a.updated);
   $('session-count').textContent = sessions.length || '';
   $('sessions').replaceChildren();
-  if (!sessions.length) $('sessions').append(node('div', 'empty-sessions', 'A fresh start.\nYour conversations will appear here.'));
+  if (!sessions.length) $('sessions').append(node('div', 'empty-sessions', searchMatches ? 'No matching conversations.' : 'A fresh start.\nYour conversations will appear here.'));
   for (const s of sessions) {
     const row = node('div', `session-row${s.id === state.sessionId ? ' active' : ''}`);
     const b = node('button'); b.append(node('span', '', '◌'), node('span', 'session-title', s.title)); b.title = s.title;if(s.id===generatingId())b.append(node('small','session-generating','Generating…'));
     b.onclick=() => selectSession(s.id).catch(fail);
     const del = node('button', 'delete-session', '×'); del.title = 'Delete session'; del.setAttribute('aria-label', `Delete ${s.title}`); del.disabled = s.id===generatingId();
-    del.onclick=async()=>{if(!confirm(`Delete “${s.title}” and its saved conversation? Project files will remain.`))return;try{await api('/api/session/delete',{method:'POST',body:{id:s.id}});state.data.sessions=state.data.sessions.filter(x=>x.id!==s.id);state.drafts.delete(s.id);state.notices.delete(s.id);if(state.sessionId===s.id){state.navVersion++;state.sessionId=null;state.drafts.delete(draftKey());loadDraft();await rememberSelection();}renderSidebar();renderMessages();showView(state.view);renderRuntime();}catch(error){fail(error);}};
+    del.onclick=async()=>{if(!confirm(`Delete “${s.title}” and its saved conversation? Project files will remain.`))return;try{await api('/api/session/delete',{method:'POST',body:{id:s.id}});state.data.sessions=state.data.sessions.filter(x=>x.id!==s.id);deleteDraft(s.id);state.notices.delete(s.id);if(state.sessionId===s.id){state.navVersion++;state.sessionId=null;deleteDraft(draftKey());loadDraft();await rememberSelection();}renderSidebar();renderMessages();showView(state.view);renderRuntime();}catch(error){fail(error);}};
     row.append(b, del); $('sessions').append(row);
   }
   $('project-label').textContent = state.scope==='chat' ? 'Chat' : project()?.name || 'Workspace'; $('workspace-path').textContent = project()?.path || ''; $('workspace-path').title = project()?.path || '';
@@ -114,13 +130,16 @@ function renderSidebar() {
 }
 function renderRuntime() {
   const r = state.data.runtime; const isBusy = busy();
+  document.querySelector('.composer-caption').firstElementChild.textContent=r.source==='remote' ? 'Remote model · messages are sent to the configured server' : state.scope==='chat' ? 'Local inference · general conversation' : 'Local inference · writes need your review';
+  chatIntro.querySelector('p').textContent=r.source==='remote' ? 'Ask a question, explore an idea, or just talk. Messages are sent to your configured model server.' : 'Ask a question, explore an idea, or just talk. Your conversation stays on this computer.';
   const name = shortModel(r.model?.name);
   $('runtime-label').textContent = r.status === 'loading' ? 'Loading model…' : r.status === 'error' ? 'Runtime needs attention' : name;
   $('active-model-label').textContent = r.model ? `${r.status === 'loading' ? 'Loading · ' : ''}${name}` : 'Choose a model';
   $('composer-model').textContent = name;
   $('runtime-dot').className = `dot ${r.status === 'ready' ? '' : r.status === 'loading' ? 'loading' : r.status === 'error' ? 'error' : 'muted'}`;
   $('hardware-label').textContent = `${state.data.hardware.ramGiB.toFixed(0)} GB RAM · ${r.status === 'ready' ? 'Ready' : r.status === 'stopped' ? 'Idle' : r.status}`;
-  $('send').disabled=r.status!=='ready'||isBusy||Boolean(state.loadingSession)||(!$('prompt').value.trim()&&!state.images.length);$('send').hidden=visibleRun();
+  $('send').disabled=r.status!=='ready'||isBusy||Boolean(state.loadingSession)||(!$('prompt').value.trim()&&!state.images.length&&!state.documents.length);$('send').hidden=visibleRun();
+  queueButton.hidden=!isBusy;queueButton.disabled=queueAdding||Boolean(queuedMessage)||Boolean(state.loadingSession)||(!$('prompt').value.trim()&&!state.images.length&&!state.documents.length)||r.status!=='ready';renderQueue();
   $('attach-image').disabled=Boolean(state.loadingSession);$('attach-image').title='Attach, paste or drop an image. Vision setup is available if needed.';
   $('stop-task').hidden=!state.sending&&!state.data.active;$('prompt').disabled=Boolean(state.loadingSession);
   generationBanner.hidden=!isBusy;const activeTitle=state.run?.current?.title||state.data.sessions.find(s=>s.id===state.data.active)?.title;
@@ -130,7 +149,7 @@ function renderRuntime() {
   $('runtime-logs').textContent = r.logs?.join('\n') || 'No runtime output yet.';
   $('unload-model').disabled=!r.model || isBusy || r.status==='stopping';
   $('unload-model').textContent=r.status==='loading' ? 'Cancel loading' : 'Unload model';
-  $('install-runtime').disabled = state.installing || isBusy || ['loading', 'ready', 'stopping'].includes(r.status);
+  $('install-runtime').disabled = state.installing || isBusy || state.data.modelConversion?.active || ['loading', 'ready', 'stopping'].includes(r.status);
   $('install-runtime').hidden=false;
   $('runtime-backend').disabled=$('install-runtime').disabled;
   $('library-runtime-status').textContent = r.status === 'ready' ? 'Model ready' : r.status === 'loading' ? 'Loading your model…' : r.status === 'error' ? 'Runtime needs attention' : state.data.runtimeInstalled ? 'llama.cpp is installed' : 'One quick setup step';
@@ -141,16 +160,20 @@ function renderRuntime() {
   if (state.view === 'models') renderModels();
 }
 function renderModels() {
+  const signature=JSON.stringify([state.data.models,state.data.runtime.status,state.data.runtime.model?.path,state.data.runtimeInstalled,busy(),state.installing,state.data.modelConversion?.active,state.data.modelPerformance]);
+  if(signature===modelRenderKey)return; modelRenderKey=signature;
   $('model-list').replaceChildren();
   if (!state.data.models.length) $('model-list').append(node('div', 'empty-state', 'No GGUF models found. Point Settings to a folder containing your .gguf files, then refresh this library.'));
   for (const model of state.data.models) {
     const active = state.data.runtime.model?.path === model.path;
     const card = node('div', 'model-card'); const info = node('div', 'model-card-info'); info.append(node('strong', '', model.name));
     const meta = node('small'); meta.append(node('span', '', 'GGUF'), document.createTextNode(`${(model.bytes / 1024 ** 3).toFixed(2)} GiB · ${active ? state.data.runtime.status : 'On this device'}`)); info.append(meta);
-    const load = node('button', active ? 'secondary-button' : 'primary-button', active ? state.data.runtime.status === 'loading' ? 'Loading…' : 'Loaded' : 'Load model');
-    load.disabled = active || busy() || ['loading', 'stopping'].includes(state.data.runtime.status) || !state.data.runtimeInstalled;
-    load.onclick = async () => { load.disabled = true; try { state.data.runtime = await api('/api/model/load', { method: 'POST', body: { path: model.path } }); renderRuntime(); toast('Loading model. Progress is shown in the runtime logs.'); } catch (error) { fail(error); renderModels(); } };
-    card.append(node('div', 'model-symbol', '◈'), info, load); $('model-list').append(card);
+    const speed=state.data.modelPerformance?.[model.path];if(speed && speed.modelBytes===model.bytes && Number.isFinite(speed.tokensPerSecond))info.append(node('small','model-speed',`Last measured: ${speed.tokensPerSecond.toFixed(1)} tokens/s · ${speed.mode}${speed.gpuLayers ? ` (${speed.gpuLayers} GPU layers)` : ''} · context ${speed.contextSize}. Speed varies with workload.`));else info.append(node('small','model-speed','Speed not measured yet. Run this model to measure it on your computer.'));
+    const load = node('button', active ? 'secondary-button' : 'primary-button', active ? state.data.runtime.status === 'loading' ? 'Loading…' : 'Loaded' : state.data.runtimeInstalled ? 'Load model' : 'Set up & load');
+    load.disabled = active || busy() || state.data.modelConversion?.active || state.installing || ['loading', 'stopping'].includes(state.data.runtime.status);
+    load.onclick = async () => { load.disabled = true; try { if(!state.data.runtimeInstalled){state.installing=true;renderRuntime();await api('/api/runtime/install',{method:'POST',body:{backend:'auto'}});state.installing=false;await refresh();} state.data.runtime = await api('/api/model/load', { method: 'POST', body: { path: model.path } }); renderRuntime(); toast('Loading model. Progress is shown in the runtime logs.'); } catch (error) { state.installing=false;fail(error);modelRenderKey='';renderModels(); } };
+    const check=node('button','secondary-button','Check fit');check.type='button';check.onclick=async()=>{check.disabled=true;try{const plan=await api('/api/model/plan',{method:'POST',body:{path:model.path}});let detail=info.querySelector('.model-fit');if(!detail){detail=node('small','model-fit');info.append(detail);}detail.textContent=`${state.data.runtimeInstalled ? '' : 'CPU-only estimate until a runtime is installed. '}Planned ${plan.mode}: estimated ${plan.ramGiB.toFixed(1)} GiB system RAM${plan.vramGiB ? ` · ${plan.vramGiB.toFixed(1)} GiB GPU memory` : ''}. ${plan.errors.length ? plan.errors.join(' ') : 'Estimated to fit currently available memory; actual usage may vary.'}`;}catch(error){fail(error);}finally{check.disabled=false;}};
+    card.append(node('div', 'model-symbol', '◈'), info, check, load); $('model-list').append(card);
   }
 }
 function messageElement(message, streaming = false) {
@@ -167,16 +190,26 @@ function messageElement(message, streaming = false) {
   else body.textContent = message.content || (streaming ? 'Thinking…' : '');
   wrap.append(body);
   if (message.images?.length) { const images=node('div','message-images'); for (const image of message.images) { const picture=node('img'); picture.src=image.url; picture.alt=image.name || 'Attached image'; images.append(picture); } wrap.append(images); }
+  if (message.documents?.length) for(const document of message.documents){const details=node('details','message-document');details.append(node('summary','',`${document.name}${document.truncated?' · excerpt':''}`),node('pre','',document.text));wrap.append(details);}
   if (message.tool_calls) for (const call of message.tool_calls) {
     const details = node('details', 'tool-event'); details.append(node('summary', '', `↳ ${call.function.name}`), node('pre', '', call.function.arguments)); wrap.append(details);
   }
+  if(!streaming && message.content) {
+    const actions=node('div','message-actions');
+    const copy=node('button','text-button','Copy');copy.type='button';copy.onclick=()=>navigator.clipboard.writeText(message.content).then(()=>toast('Message copied.')).catch(fail);actions.append(copy);
+    const original=message.role==='user' ? message : [...(session()?.messages || [])].slice(0,(session()?.messages || []).findIndex(m=>m.id===message.id)).reverse().find(m=>m.role==='user');
+    if(original?.id && ['user','assistant'].includes(message.role)) { const action=node('button','text-button',message.role==='user' ? 'Edit in copy' : 'Retry in copy');action.type='button';action.disabled=busy();action.onclick=async()=>{try{const branch=await api('/api/session/branch-at',{method:'POST',body:{id:session().id,messageId:original.id}});await refresh();await selectSession(branch.session.id);$('prompt').value=branch.message.content;state.images=branch.message.images || [];state.documents=branch.message.documents || [];saveDraft();features.renderImages();features.renderDocuments();$('prompt').dispatchEvent(new Event('input'));if(message.role==='assistant')$('chat-form').requestSubmit();else $('prompt').focus();}catch(error){fail(error);}};actions.append(action); }
+    wrap.append(actions);
+  }
   return wrap;
 }
-function renderMessages() {
+function renderMessages(preserveScroll=false) {
+  const priorHeight=$('messages').scrollHeight,priorTop=$('messages').scrollTop;
   const messages = session()?.messages || [];
   $('messages').replaceChildren(); $('task-notice').hidden = true;
   if (!messages.length) $('messages').append(welcome);
-  for (const m of messages) {
+  if(messages.length>historyLimit){const older=node('button','text-button','Show older messages');older.type='button';older.onclick=()=>{historyLimit+=100;renderMessages(true);};$('messages').append(older);}
+  for (const m of messages.slice(-historyLimit)) {
     if (m.role === 'tool') {
       const details = node('details', 'tool-event'); details.append(node('summary', '', `✓ ${m.name || 'Tool'} result`), node('pre', '', m.content)); $('messages').append(details);
     } else $('messages').append(messageElement(m));
@@ -184,12 +217,19 @@ function renderMessages() {
   if(visibleRun())for(const approval of state.run.approvals.values())approvalCard(approval);
   if(state.notices.has(state.sessionId))notice(state.notices.get(state.sessionId));
   $('page-title').textContent = ['chat','workspace'].includes(state.view) ? session()?.title || (state.scope==='chat' ? 'New chat' : 'New workspace session') : $('page-title').textContent;
-  scrollToBottom();
+  if(preserveScroll)$('messages').scrollTop=priorTop+$('messages').scrollHeight-priorHeight;else scrollToBottom();
+}
+function scheduleStreamUpdate(message) {
+  streamUpdates.set(message.id,message);if(streamFrame)return;
+  streamFrame=requestAnimationFrame(()=>{streamFrame=0;const nearBottom=$('messages').scrollHeight-$('messages').scrollTop-$('messages').clientHeight<160;
+    for(const [id,m] of streamUpdates){const article=document.querySelector(`[data-message-id="${id}"]`);if(!article)continue;article.querySelector('.message-body').textContent=m.content || 'Thinking…';if(m.reasoning){let details=article.querySelector('.reasoning');if(!details){details=node('details','reasoning');details.append(node('summary','','Model reasoning'),node('div'));article.querySelector('.message-body').before(details);}details.querySelector('div').textContent=m.reasoning;}}
+    streamUpdates.clear();if(nearBottom)scrollToBottom();
+  });
 }
 function scrollToBottom() { $('messages').scrollTop = $('messages').scrollHeight; }
 function notice(message) { $('task-notice').textContent = message; $('task-notice').hidden = false; }
 async function newSession() {
-  saveDraft();state.navVersion++;state.loadingSession=null;state.sessionId=null;state.drafts.delete(draftKey());loadDraft();state.lastSessions[state.scope]=null;showView(state.scope);renderSidebar();renderMessages();renderRuntime();$('prompt').focus();
+  saveDraft();state.navVersion++;state.loadingSession=null;state.sessionId=null;historyLimit=100;deleteDraft(draftKey());loadDraft();state.lastSessions[state.scope]=null;showView(state.scope);renderSidebar();renderMessages();renderRuntime();$('prompt').focus();
   await rememberSelection();
 }
 async function rememberSelection() { const ticket=state.navVersion;const values={workspaceId:state.workspaceId,sessionId:state.sessionId,view:state.scope};try { state.lastSessions[state.scope]=state.sessionId;const selected=await api('/api/session/select',{method:'POST',body:values});if(ticket===state.navVersion)state.data.selection=selected; } catch(error){fail(error);} }
@@ -200,7 +240,7 @@ async function selectSession(id) {
   setScope(kind(selected));
   if (kind(selected)==='workspace' && state.workspaceId!==selected.workspaceId) { state.workspaceId=selected.workspaceId; state.file=null; state.dirty=false; state.folder='.'; renderEditor(); await refreshFiles(); }
   const index=state.data.sessions.findIndex(s => s.id===id); if (index<0) state.data.sessions.unshift(selected); else state.data.sessions[index]=selected;
-  state.sessionId=id;loadDraft();showView(state.scope);renderSidebar();renderMessages();renderRuntime();await rememberSelection();
+  state.sessionId=id;historyLimit=100;loadDraft();showView(state.scope);renderSidebar();renderMessages();renderRuntime();await rememberSelection();
   }finally{if(ticket===state.navVersion){state.loadingSession=null;renderRuntime();}}
 }
 async function switchProject(id) {
@@ -251,6 +291,7 @@ function fillSettings() { for (const key of settingKeys) $(`setting-${key}`).val
 async function refresh() {
   const previous = state.data;
   state.data = await api('/api/bootstrap');
+  if(!previous) { try { const [drafts,queue]=await Promise.all([api('/api/drafts'),api('/api/queue')]); state.drafts=new Map(Object.entries(drafts));queuedMessage=queue.message;queuePaused=Boolean(queuedMessage); } catch(error) { fail(error); } }
   if(state.run?.current){const index=state.data.sessions.findIndex(s=>s.id===state.run.current.id);if(index>=0)state.data.sessions[index]=state.run.current;}
   if (!previous && state.data.settings.restoreSession) { const selection=state.data.selection || {}; state.workspaceId=selection.workspaceId; state.scope=selection.view==='workspace' ? 'workspace' : 'chat'; state.view=state.scope; state.lastSessions={chat:selection.chatSessionId || null,workspace:selection.workspaceSessionId || (selection.view!=='chat' ? selection.sessionId : null)}; state.sessionId=state.lastSessions[state.scope]; }
   if (!state.workspaceId || !project()) state.workspaceId = state.data.workspaces[0]?.id;
@@ -265,13 +306,22 @@ function approvalCard(event) {
   const card=node('div','approval'); card.append(node('div','approval-title',`${event.kind==='mcp' ? 'Review external MCP tool call' : event.exists ? 'Review file replacement' : 'Review new document'} · ${event.path}`),node('p','',event.description || 'The agent is waiting. Applying this proposal writes the following content to your project.'));
   const columns = node('div', 'proposal-columns');
   for (const [label, value] of [['Before', event.before || '(new file)'], ['After', event.after]]) { const col = node('div', 'proposal-column'); col.append(node('span', '', label), node('pre', '', value)); columns.append(col); }
+  if(event.kind!=='mcp') { const before=(event.before || '').split('\n'),after=(event.after || '').split('\n');let start=0,endBefore=before.length,endAfter=after.length;while(start<endBefore && start<endAfter && before[start]===after[start])start++;while(endBefore>start && endAfter>start && before[endBefore-1]===after[endAfter-1]){endBefore--;endAfter--;}const changes=[...before.slice(start,endBefore).map(line=>`− ${line}`),...after.slice(start,endAfter).map(line=>`+ ${line}`)].join('\n');const summary=node('details','change-preview');summary.open=true;summary.append(node('summary','','Changes'),node('pre','',changes.slice(0,20000) || 'No text changes.'));if(changes.length>20000)summary.append(node('small','','Preview shortened; the full text is available below.'));card.append(summary); }
+  const full=node('details','proposal-full');full.append(node('summary','','View complete before and after'),columns);
   const actions=node('div','approval-actions'); const yes=node('button','primary-button',event.kind==='mcp' ? 'Run external tool' : 'Apply write'); const no=node('button','secondary-button','Decline');
   for (const [button, accept] of [[yes, true], [no, false]]) button.onclick = async () => {
     yes.disabled = true; no.disabled = true;
     try { await api('/api/approval', { method: 'POST', body: { id: event.id, accept } });pendingRun?.approvals.delete(event.id);renderRuntime(); actions.append(node('span', '', accept ? 'Approved · waiting for save result' : 'Declined')); }
     catch (error) { fail(error); actions.append(node('span', '', 'Proposal is no longer active.')); }
   };
-  actions.append(yes, no); card.append(columns, actions); $('messages').append(card); scrollToBottom();
+  actions.append(yes, no); card.append(full, actions); $('messages').append(card); scrollToBottom();
+}
+
+function installFileHistory() {
+  const button=node('button','icon-button','↶');button.type='button';button.title='Assistant change history';button.setAttribute('aria-label','Assistant change history');document.querySelector('.panel-header>div').prepend(button);
+  const dialog=node('dialog','forge-dialog');dialog.innerHTML='<h3>Assistant change history</h3><p>Restore earlier versions of files changed by the assistant. Files changed since the assistant edit are protected.</p><div class="history-list"></div><div class="dialog-actions"><button type="button" class="secondary-button">Close</button></div>';document.body.append(dialog);dialog.querySelector('.dialog-actions button').onclick=()=>dialog.close();
+  const refreshHistory=async()=>{const entries=await api(`/api/file/history?workspaceId=${encodeURIComponent(state.workspaceId)}`);const list=dialog.querySelector('.history-list');list.replaceChildren();if(!entries.length)list.append(node('p','','No assistant file changes yet.'));for(const entry of entries){const row=node('div','history-item');const info=node('span','',`${entry.path} · ${new Date(entry.created).toLocaleString()}${entry.undone?' · restored':''}`);const undo=node('button','secondary-button',entry.existed?'Restore previous':'Remove created file');undo.disabled=entry.undone;undo.onclick=async()=>{if(state.dirty && state.file?.path===entry.path){toast('Save or discard your open edits before restoring this file.',true);return;}if(!confirm(`Undo the assistant change to ${entry.path}?`))return;undo.disabled=true;try{await api('/api/file/undo',{method:'POST',body:{id:entry.id,workspaceId:state.workspaceId}});if(state.file?.path===entry.path){state.file=null;state.dirty=false;renderEditor();}await refreshFiles();await refreshHistory();toast('Assistant change undone.');}catch(error){fail(error);undo.disabled=false;}};row.append(info,undo);list.append(row);}};
+  button.onclick=()=>{dialog.showModal();refreshHistory().catch(fail);};
 }
 async function* events(body) {
   const decoder = new TextDecoder(); let buffer = '';
@@ -280,23 +330,26 @@ async function* events(body) {
     while ((index = buffer.indexOf('\n\n')) !== -1) { const block = buffer.slice(0, index); buffer = buffer.slice(index + 2); const data = block.split('\n').filter(l => l.startsWith('data:')).map(l => l.slice(5).trimStart()).join('\n'); if (data) yield JSON.parse(data); }
   }
 }
-async function send(event) {
-  event.preventDefault(); const text=$('prompt').value.trim() || (state.images.length ? 'Describe the attached image.' : '');
+async function send(event,queued=null) {
+  event.preventDefault(); const queuedSession=queued ? await api(`/api/session?id=${encodeURIComponent(queued.sessionId)}`) : null; if(queued && queuedMessage?.id!==queued.id)return;
+  const text=queued ? queued.text : $('prompt').value.trim() || (state.images.length ? 'Describe the attached image.' : state.documents.length ? 'Summarize the attached files.' : '');
   if(!text||state.loadingSession)return;if(busy()){toast('The model is generating another reply. You can prepare this message and send it when that reply finishes.');return;}
-  if((state.images.length||session()?.messages?.some(m=>m.images?.length))&&!state.data.runtime.vision&&state.data.runtime.source!=='remote'){await features.visionSetup();return;}
+  const selectedImages=queued ? queued.images : state.images;const selectedSession=queuedSession || session();
+  if((selectedImages.length||selectedSession?.messages?.some(m=>m.images?.length))&&!state.data.runtime.vision&&state.data.runtime.source!=='remote'){if(queued){queuePaused=true;renderQueue();toast('Set up vision before sending the queued image.',true);}else await features.visionSetup();return;}
   if (state.data.runtime.status !== 'ready') { toast('Load a model in the Models tab first.', true); showView('models'); return; }
-  const scope=state.scope;const workspaceId=state.workspaceId;const originTicket=state.navVersion;const images=state.images;const systemPrompt=state.sessionPrompt;const mode=scope==='chat'?'chat':'agent';
-  const run={current:session()||null,originTicket,approvals:new Map(),notice:'',controller:new AbortController(),accepted:false};state.run=run;
-  state.sending=true;$('task-notice').hidden=true;$('prompt').value='';state.images=[];saveDraft();features.renderImages();showView(state.scope);
+  const scope=queuedSession ? kind(queuedSession) : state.scope;const workspaceId=queuedSession?.workspaceId || state.workspaceId;const originTicket=queued && state.sessionId!==queued.sessionId ? -1 : state.navVersion;const images=selectedImages;const documents=queued ? queued.documents || [] : state.documents;const systemPrompt=state.sessionPrompt;const mode=scope==='chat'?'chat':'agent';
+  const run={current:selectedSession||null,originTicket,approvals:new Map(),notice:'',controller:new AbortController(),accepted:false};state.run=run;
+  state.sending=true;$('task-notice').hidden=true;if(!queued){$('prompt').value='';state.images=[];state.documents=[];saveDraft();features.renderImages();features.renderDocuments();}showView(state.scope);
   renderSidebar(); renderRuntime();
   let current=run.current;
   try {
     if(!current){current=await api('/api/sessions',{method:'POST',body:{kind:scope,workspaceId:scope==='workspace'?workspaceId:null,systemPrompt}});run.current=current;state.data.sessions.unshift(current);if(originTicket===state.navVersion){state.sessionId=current.id;saveDraft();}}
     state.notices.delete(current.id);if(originTicket===state.navVersion)await rememberSelection();renderSidebar();renderRuntime();
-    const response=await fetch('/api/chat',{ method:'POST',headers:{ 'Content-Type':'application/json','X-Local-Desk-Token':token },body:JSON.stringify({ sessionId:current.id,text,mode,images }),signal:run.controller.signal });
+    const response=await fetch('/api/chat',{ method:'POST',headers:{ 'Content-Type':'application/json','X-Local-Desk-Token':token },body:JSON.stringify({ sessionId:current.id,text,mode,images,documents }),signal:run.controller.signal });
     if (!response.ok) { const data = await response.json(); throw new Error(data.error); }
     run.accepted=true;
     for await (const event of events(response.body)) {
+      if(queued && event.type==='session' && queuedMessage?.id===queued.id){await api('/api/queue',{method:'POST',body:{clear:true,id:queued.id}});queuedMessage=null;queuePaused=false;renderQueue();}
       if(event.type==='approval')run.approvals.set(event.id,event);
       if(event.type==='notice'||event.type==='error'){run.notice=event.message;state.notices.set(current.id,event.message);}
       if(event.type==='tool'){const last=current.messages.at(-1);if(last?.role==='assistant'){last.tool_calls??=[];last.tool_calls.push({function:{name:event.name,arguments:event.arguments}});}}
@@ -308,15 +361,11 @@ async function send(event) {
         if(['session','approval','done','error'].includes(event.type)){renderSidebar();renderRuntime();}
         continue;
       }
+      if(event.type==='delta'||event.type==='reasoning'){const m=current.messages.find(m=>m.id===event.id);if(m){if(event.type==='delta')m.content+=event.content;else m.reasoning+=event.content;scheduleStreamUpdate(m);}continue;}
       const nearBottom = $('messages').scrollHeight - $('messages').scrollTop - $('messages').clientHeight < 160;
       if (event.type === 'session') { Object.assign(current, event.session); renderSidebar(); renderMessages(); }
       else if (event.type === 'message') { current.messages.push(event.message); $('messages').append(messageElement(event.message, true)); }
-      else if (event.type === 'delta' || event.type === 'reasoning') {
-        const m = current.messages.find(m => m.id === event.id); if (!m) continue;
-        const article = document.querySelector(`[data-message-id="${event.id}"]`);
-        if (event.type === 'delta') { m.content += event.content; if (article) article.querySelector('.message-body').textContent = m.content; }
-        else { m.reasoning += event.content; if (article) { let details = article.querySelector('.reasoning'); if (!details) { details = node('details', 'reasoning'); details.append(node('summary', '', 'Model reasoning'), node('div')); article.querySelector('.message-body').before(details); } details.querySelector('div').textContent = m.reasoning; } }
-      } else if (event.type === 'tool') {
+      else if (event.type === 'tool') {
         const last = current.messages.at(-1); const article = last && document.querySelector(`[data-message-id="${last.id}"]`); if (article && !last.content) article.querySelector('.message-body').textContent = 'Working with project files.';
         const details = node('details', 'tool-event'); details.append(node('summary', '', `↳ ${event.name}`), node('pre', '', event.arguments)); $('messages').append(details);
       } else if (event.type === 'tool_result') {
@@ -330,13 +379,15 @@ async function send(event) {
       else if (event.type === 'usage') $('composer-model').textContent = `${shortModel(state.data.runtime.model?.name)} · ${event.usage.completion_tokens ?? '?'} output tokens`;
       if (nearBottom || ['message', 'approval'].includes(event.type)) scrollToBottom();
     }
-  } catch(error){const message=error.name==='AbortError'?'Task stopped.':error.message;run.notice=message;if(current)state.notices.set(current.id,message);if(visibleRun()){fail(message);notice(message);}else toast(message,true);if(!run.accepted&&current){state.drafts.set(current.id,{text,images,systemPrompt});if(state.sessionId===current.id)loadDraft();}}
+  } catch(error){const message=error.name==='AbortError'?'Task stopped.':error.message;run.notice=message;if(current)state.notices.set(current.id,message);if(visibleRun()){fail(message);notice(message);}else toast(message,true);if(!run.accepted&&current){state.drafts.set(current.id,{text,images,documents,systemPrompt});if(state.sessionId===current.id)loadDraft();}}
   finally {
+    if(queued && queuedMessage?.id===queued.id)queuePaused=true;
+    if(!queued && queuedMessage && run.notice)queuePaused=true;
     const wasVisible=visibleRun();state.sending=false;if(state.run===run)state.run=null;
     try { await refresh();
       renderMessages();if(!wasVisible&&current&&!run.notice)toast(`Reply finished in “${current.title}”.`);
     } catch (error) { fail(error); }
-    renderSidebar();renderRuntime();refreshFiles();if(wasVisible)$('prompt').focus();
+    renderSidebar();renderRuntime();refreshFiles();if(wasVisible)$('prompt').focus();if(queuedMessage && !run.notice && !queuePaused)setTimeout(()=>void startQueue(),0);
   }
 }
 
@@ -349,7 +400,7 @@ $('path-cancel').onclick = () => $('path-dialog').close('cancel');
 document.querySelectorAll('[data-view]').forEach(e => { e.onclick = () => showView(e.dataset.view); });
 document.querySelectorAll('[data-prompt]').forEach(e => { e.onclick = () => { $('prompt').value = e.dataset.prompt; $('prompt').focus(); renderRuntime(); }; });
 $('new-session').onclick = newSession; $('chat-form').onsubmit = send;
-$('prompt').oninput = () => { $('prompt').style.height = 'auto'; $('prompt').style.height = `${Math.min(220, $('prompt').scrollHeight)}px`; renderRuntime(); };
+$('prompt').oninput = () => { $('prompt').style.height = 'auto'; $('prompt').style.height = `${Math.min(220, $('prompt').scrollHeight)}px`; saveDraft(); renderRuntime(); };
 $('prompt').onkeydown=e => { if (e.key==='Enter' && !e.shiftKey && !e.isComposing && state.data?.settings.enterToSend!==false) { e.preventDefault(); $('chat-form').requestSubmit(); } };
 $('stop-task').onclick = async () => { try {state.run?.controller.abort();await api('/api/stop',{method:'POST',body:{}});toast('Stopping the current response…');} catch(error){fail(error);} };
 $('model-shortcut').onclick = $('runtime-shortcut').onclick = () => showView('models');
@@ -392,15 +443,24 @@ $('install-runtime').onclick = async () => {
   finally { state.installing = false; renderRuntime(); }
 };
 document.addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'n') { e.preventDefault(); newSession(); } if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); saveFile(); } });
+$('search-chats').addEventListener('input',()=>{const query=$('search-chats').value.trim();const ticket=++searchTicket;clearTimeout(searchTimer);if(!query){searchMatches=null;renderSidebar();return;}searchTimer=setTimeout(async()=>{try{const result=await api(`/api/search/chats?q=${encodeURIComponent(query)}`);if(ticket===searchTicket){searchMatches=new Set(result.ids);renderSidebar();}}catch(error){fail(error);}},200);});
 window.addEventListener('beforeunload', e => { if (state.dirty || state.sending) { e.preventDefault(); e.returnValue = ''; } });
 features=initFeatures({ state,api,refresh,showView,session,busy,toast,fail,askPath,selectSession,newSession,token,renderRuntime,saveDraft });
+journey=initJourney({state,api,refresh,showView,toast,fail,features});
+initHelp();
+installFileHistory();
+window.desktop?.onPrepareQuit?.(async()=>{if(state.data){saveDraft();clearTimeout(draftTimer);await flushDrafts();await draftQueue;}});
 await refresh().catch(error => { fail(error); notice(`Could not connect: ${error.message}`); });
+let polling=false;
 setInterval(async () => {
   if (!state.data) return;
+  if(polling || document.hidden && !state.sending) return; polling=true;
   try {
     const old = state.data.runtime.status; const result = await api('/api/runtime'); state.data.runtime = result; state.data.active = result.active;
     if (old !== result.status) { renderSidebar(); if (result.status === 'ready') toast('Your model is ready. Start a session to chat.'); if (result.status === 'error') toast(result.error, true); }
     renderRuntime();
     await features.tick(state.data);
-  } catch { /* Preserve the screen during a short connection interruption. */ }
+    await journey?.tick();
+    if(queuedMessage && !queuePaused && !busy())void startQueue();
+  } catch { /* Preserve the screen during a short connection interruption. */ } finally { polling=false; }
 }, 2000);

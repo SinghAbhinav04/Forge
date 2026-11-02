@@ -29,6 +29,6 @@ export class LocalApi {
     });
     await new Promise((resolve,reject) => server.once('error',reject).listen(port,host,resolve)); this.server=server; return this.snapshot();
   }
-  record(usage) { this.store.state.usage.push({ created:Date.now(),source:'api',model:this.runtime.model?.name,...usage }); void this.store.save().catch(() => {}); }
+  record(usage) { this.store.state.usage.push({ created:Date.now(),source:'api',model:this.runtime.model?.name,...usage }); if(this.store.state.usage.length>10000)this.store.state.usage.splice(0,this.store.state.usage.length-10000); void this.store.save({sessionIds:[]}).catch(() => {}); }
   async stop() { if (!this.server) return; for (const controller of this.controllers) controller.abort(); const server=this.server; this.server=null; server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
 }
