@@ -5,7 +5,7 @@ import { createReadStream } from 'node:fs';
 import { createInterface } from 'node:readline';
 
 const blocked = new Set(['.git', '.codex', '.agents', '.aws', '.ssh', 'node_modules', '.data', 'runtime']);
-const extensions = new Set(['.md', '.txt', '.json', '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.css', '.html', '.csv', '.yaml', '.yml', '.toml', '.py', '.rs', '.xml', '.svg', '.sql', '.log', '.ini']);
+const extensions = new Set(['.md', '.txt', '.json', '.jsonl', '.tsv', '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.css', '.html', '.csv', '.yaml', '.yml', '.toml', '.py', '.rs', '.xml', '.svg', '.sql', '.log', '.ini']);
 export const MAX_FILE = 512 * 1024;
 export const hash = text => createHash('sha256').update(text).digest('hex');
 export const isText = name => extensions.has(path.extname(name).toLowerCase());

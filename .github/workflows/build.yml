@@ -63,6 +63,15 @@ jobs:
       - name: Check guided setup, attachments and queued chat
         if: matrix.platform == 'windows' && matrix.arch == 'x64'
         run: npm run test:journey
+      - name: Check local project knowledge workflow
+        if: matrix.platform == 'windows' && matrix.arch == 'x64'
+        run: npm run test:knowledge
+      - name: Check shell command approval
+        if: matrix.platform == 'windows' && matrix.arch == 'x64'
+        run: npm run test:commands
+      - name: Check model benchmark interface
+        if: matrix.platform == 'windows' && matrix.arch == 'x64'
+        run: npm run test:benchmark
       - name: Check release tag matches package version
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash

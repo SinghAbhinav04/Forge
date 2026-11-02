@@ -35,6 +35,13 @@ const explanations={
  'vision-model':'Choose an image-capable model and the matching projector supplied for it.',
  'vision-projector':'A matching multimodal projector lets the selected model understand images.',
  'preset-model':'Model-specific defaults apply the next time this model is loaded.'
+ ,idleUnloadMinutes:'Unload an idle model managed by Forge after this many minutes. Zero keeps it loaded; remote models are managed by their own server.',
+ allowCommandTools:'Allow the workspace agent to propose host shell commands. Every command requires your approval, and commands are not sandboxed.',
+ 'knowledge-path':'Enter a file or folder path inside this project. Forge indexes supported files locally and can include retrieved passages in later workspace questions.',
+ 'project-instructions-text':'Instructions shared by workspace conversations in this project. They are sent to the selected model, including remote providers.',
+ 'prompt-preset':'Copy preset instructions into the current chat’s system prompt. Presets do not change the active model or tool permissions.',
+ 'web-search-query':'This search query is sent to Ollama’s online search service. Results are snippets rather than full-page reads.',
+ 'web-search-key':'An Ollama API key is sent to the search service with this request. Forge does not save it.'
 };
 
 export function initHelp() {

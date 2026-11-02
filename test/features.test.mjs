@@ -12,7 +12,7 @@ import { LocalApi } from '../src/local-api.mjs';
 import { Runtime } from '../src/runtime.mjs';
 import { memoryPlan,chooseMemoryPlan } from '../src/hardware.mjs';
 import { validateSettings } from '../src/settings.mjs';
-import { Downloads,searchModels } from '../src/hub.mjs';
+import { Downloads,searchModels,modelFiles } from '../src/hub.mjs';
 import { atomicJson } from '../src/storage.mjs';
 import { findProjectors } from '../src/vision.mjs';
 import { THEMES } from '../public/themes.js';
@@ -140,12 +140,12 @@ test('model downloads pause, resume with Range, and verify the final GGUF checks
   const { dir,cleanup }=await temp(t); const store=await openStore(dir); store.state.settings.modelDir=dir; const data=Buffer.alloc(128*1024,4); data.write('GGUF'); const sha=createHash('sha256').update(data).digest('hex');
   const originalFetch=globalThis.fetch; let rangeSeen=false;
   globalThis.fetch=async (url,options={}) => {
-    if (String(url).includes('/api/models/owner/model')) return Response.json({ siblings:[{ rfilename:'model.gguf',size:data.length,lfs:{ sha256:sha,size:data.length } }] });
-    if (String(url).includes('/api/models?')) return Response.json([{ id:'owner/model',downloads:10 }]);
+    if (String(url).includes('/api/models/owner/model')) return Response.json({ tags:['license:apache-2.0'],siblings:[{ rfilename:'model.gguf',size:data.length,lfs:{ sha256:sha,size:data.length } }] });
+    if (String(url).includes('/api/models?')) return Response.json([{ id:'owner/model',downloads:10 },{id:'https://untrusted.example/'}]);
     const offset=options.headers?.Range ? Number(options.headers.Range.match(/\d+/)[0]) : 0; if (offset) rangeSeen=true; let cursor=offset; let timer;
     const stream=new ReadableStream({ async pull(controller) { await new Promise(r => { timer=setTimeout(r,10); }); if (options.signal?.aborted) { controller.error(new Error('aborted')); return; } if (cursor>=data.length) { controller.close(); return; } const end=Math.min(cursor+4096,data.length); controller.enqueue(data.subarray(cursor,end)); cursor=end; },cancel() { clearTimeout(timer); } });
     return new Response(stream,{ status:offset ? 206 : 200,headers:offset ? { 'Content-Range':`bytes ${offset}-${data.length-1}/${data.length}` } : {} });
   };
   const downloads=new Downloads(store); cleanup.push(async () => { await downloads.close(); globalThis.fetch=originalFetch; });
-  assert.equal((await searchModels('test'))[0].id,'owner/model'); const job=await downloads.create('owner/model','model.gguf'); await wait(async () => { try { return (await fs.stat(`${downloads.jobs.get(job.id).destination}.part`)).size>0; } catch { return false; } }); await downloads.control(job.id,'pause'); assert.equal(downloads.jobs.get(job.id).status,'paused'); await downloads.control(job.id,'resume'); await wait(() => ['completed','error'].includes(downloads.jobs.get(job.id).status)); assert.equal(downloads.jobs.get(job.id).status,'completed',downloads.jobs.get(job.id).error); assert.equal(rangeSeen,true); assert.equal(createHash('sha256').update(await fs.readFile(downloads.jobs.get(job.id).destination)).digest('hex'),sha);
+  const search=await searchModels('test');assert.equal(search.length,1);assert.equal(search[0].id,'owner/model');assert.equal((await modelFiles('owner/model'))[0].license,'apache-2.0');const job=await downloads.create('owner/model','model.gguf'); await wait(async () => { try { return (await fs.stat(`${downloads.jobs.get(job.id).destination}.part`)).size>0; } catch { return false; } }); await downloads.control(job.id,'pause'); assert.equal(downloads.jobs.get(job.id).status,'paused'); await downloads.control(job.id,'resume'); await wait(() => ['completed','error'].includes(downloads.jobs.get(job.id).status)); assert.equal(downloads.jobs.get(job.id).status,'completed',downloads.jobs.get(job.id).error); assert.equal(rangeSeen,true); assert.equal(createHash('sha256').update(await fs.readFile(downloads.jobs.get(job.id).destination)).digest('hex'),sha);
 });

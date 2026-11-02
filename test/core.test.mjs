@@ -101,6 +101,12 @@ test('declining a proposal leaves the document unchanged', async t => {
   assert.ok(f.session.messages.some(m => m.role === 'tool' && m.content.includes('User declined')));
 });
 
+test('shell commands are disabled by default and require explicit per-command approval',async t=>{
+ const denied=await agentFixture(t,[toolCall('run_command',{command:'echo forge-command'}),completion('Not run.')]);const deniedEvents=[];await denied.agent.run({...denied,text:'Run a command',mode:'agent',emit:event=>deniedEvents.push(event)});assert.ok(!deniedEvents.some(event=>event.type==='approval'));assert.ok(denied.session.messages.some(message=>message.role==='tool' && message.content.includes('disabled')));
+ const declined=await agentFixture(t,[toolCall('run_command',{command:'echo forge-command'}),completion('Declined.')]);declined.store.state.settings.allowCommandTools=true;const declinedEvents=[];await declined.agent.run({...declined,text:'Run a command',mode:'agent',emit:event=>{declinedEvents.push(event);if(event.type==='approval')queueMicrotask(()=>declined.agent.approve(event.id,false));}});assert.ok(declinedEvents.some(event=>event.type==='approval' && event.kind==='command' && event.after==='echo forge-command'));assert.ok(declined.session.messages.some(message=>message.role==='tool' && message.content.includes('declined')));
+ const accepted=await agentFixture(t,[toolCall('run_command',{command:'echo forge-command'}),completion('Completed.')]);accepted.store.state.settings.allowCommandTools=true;await accepted.agent.run({...accepted,text:'Run a command',mode:'agent',emit:event=>{if(event.type==='approval')queueMicrotask(()=>accepted.agent.approve(event.id,true));}});const result=JSON.parse(accepted.session.messages.find(message=>message.role==='tool').content);assert.equal(result.exitCode,0);assert.match(result.output,/forge-command/);
+});
+
 test('vision attachments reach the model as image content and persist in the chat',async t => {
   const image={ name:'shape.png',url:'data:image/png;base64,iVBORw0KGgo=' };
   const f=await agentFixture(t,[completion('A shape.')]); f.runtime.configuration={ contextSize:4096,imageTokens:1120,vision:true };

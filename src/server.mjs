@@ -14,6 +14,7 @@ import { createFeatures } from './features.mjs';
 import { hardware,recommendedRuntime } from './hardware.mjs';
 import { validateImages } from './images.mjs';
 import { validateDocuments,extractAttachment } from './documents.mjs';
+import { IdleUnloader } from './idle-unload.mjs';
 import { conversationKind,validateSessionPrompt } from './conversations.mjs';
 
 const APP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -37,10 +38,13 @@ export async function createApplication(options = {}) {
   let origin;
   let installing = false;
   let changingModel = false;
+  const workspaceWrites=new Set();
   const workspaceById = id => { const w = store.state.workspaces.find(w => w.id === id); if (!w) throw new Error('Workspace not found.'); return w; };
   const models = async () => { try { return { models: await scanModels(store.state.settings.modelDir), modelError: '' }; } catch (error) { return { models: [], modelError: `Cannot scan model folder: ${error.message}` }; } };
   const features = createFeatures({ appRoot,store,runtime,agent,models,workspaceById,modelOperation:()=>changingModel || installing });
   await features.initialize();
+  const idleUnloader=new IdleUnloader(runtime,()=>store.state.settings,()=>changingModel || installing || Boolean(agent.active) || features.startingHeavyTask || features.modelConverter.active,async()=>{changingModel=true;try{await runtime.stop();runtime.phase='Unloaded after inactivity';}finally{changingModel=false;}});
+  const idleTimer=setInterval(()=>{void idleUnloader.tick().catch(()=>{});},5000);idleTimer.unref();
   let modelCache=null; let modelCacheUntil=0;
   let conversionRevision;
   const cachedModels=async () => { const revision=features.modelConverter.job?.completed; if (!modelCache || Date.now()>modelCacheUntil || revision!==conversionRevision) { modelCache=await models(); modelCacheUntil=Date.now()+5000; conversionRevision=revision; } return modelCache; };
@@ -62,7 +66,7 @@ export async function createApplication(options = {}) {
         }
         if (route === '/api/runtime' && req.method === 'GET') { json(res, 200, { ...runtime.snapshot(), active: agent.active?.sessionId || null }); return; }
         if (route === '/api/drafts' && req.method === 'GET') { json(res,200,store.state.drafts); return; }
-        if (route === '/api/attachments/text' && req.method === 'POST') {const input=await jsonBody(req,12*1024**2);json(res,200,await extractAttachment(store.dataDir,input.name,input.base64));return;}
+        if (route === '/api/attachments/text' && req.method === 'POST') {const input=await jsonBody(req,12*1024**2);const controller=new AbortController();const disconnected=()=>{if(!res.writableEnded)controller.abort(new Error('Document upload cancelled.'));};res.once('close',disconnected);try{json(res,200,await extractAttachment(store.dataDir,input.name,input.base64,{signal:controller.signal}));}finally{res.off('close',disconnected);}return;}
         if (route === '/api/queue' && req.method === 'GET') { json(res,200,{message:store.state.queuedMessage || null});return; }
         if (route === '/api/queue' && req.method === 'POST') {
           const input=await jsonBody(req,4*1024**2);
@@ -135,6 +139,10 @@ export async function createApplication(options = {}) {
           if (!workspace) { workspace = { id: randomUUID(), path: folder, name: path.basename(folder) || folder }; store.state.workspaces.push(workspace); await store.save(); }
           json(res, 200, workspace); return;
         }
+        if (route === '/api/workspace/instructions' && req.method === 'POST') {
+          const input=await jsonBody(req);const workspace=workspaceById(input.workspaceId);if(typeof input.instructions!=='string' || input.instructions.length>8000)throw new Error('Project instructions must be at most 8,000 characters.');if(workspaceWrites.has(workspace.id))throw new Error('Project instructions are already being saved.');
+          workspaceWrites.add(workspace.id);const previous=workspace.instructions;workspace.instructions=input.instructions;try{await store.save({sessionIds:[]});}catch(error){workspace.instructions=previous;throw error;}finally{workspaceWrites.delete(workspace.id);}json(res,200,{id:workspace.id,instructions:workspace.instructions});return;
+        }
         if (route === '/api/sessions' && req.method === 'POST') {
           const input = await jsonBody(req); const kind=input.kind ?? 'workspace'; if (!['chat','workspace'].includes(kind)) throw new Error('Choose Chat or Workspace.'); if (kind==='workspace') workspaceById(input.workspaceId);
           const session = { id: randomUUID(),kind,systemPrompt:validateSessionPrompt(input.systemPrompt), workspaceId:kind==='workspace' ? input.workspaceId : null, title: 'New session', messages: [], created: Date.now(), updated: Date.now() };
@@ -176,7 +184,7 @@ export async function createApplication(options = {}) {
         }
         json(res, 404, { error: 'API route not found.' }); return;
       }
-      const staticFiles = { '/':'index.html','/app.js':'app.js','/help.js':'help.js','/journey.js':'journey.js','/documents.js':'documents.js','/features.js':'features.js','/model-conversion.js':'model-conversion.js','/training-data.js':'training-data.js','/composer.js':'composer.js','/themes.js':'themes.js','/themes.css':'themes.css','/styles.css':'styles.css','/features.css':'features.css','/icon.svg':'icon.svg' };
+      const staticFiles = { '/':'index.html','/app.js':'app.js','/help.js':'help.js','/journey.js':'journey.js','/knowledge.js':'knowledge.js','/project-git.js':'project-git.js','/project-instructions.js':'project-instructions.js','/web-search.js':'web-search.js','/documents.js':'documents.js','/features.js':'features.js','/model-conversion.js':'model-conversion.js','/training-data.js':'training-data.js','/composer.js':'composer.js','/themes.js':'themes.js','/themes.css':'themes.css','/styles.css':'styles.css','/features.css':'features.css','/icon.svg':'icon.svg' };
       if (req.method !== 'GET' || !staticFiles[route]) { json(res, 404, { error: 'Not found.' }); return; }
       const file = path.join(APP_ROOT, 'public', staticFiles[route]);
       res.writeHead(200, { 'Content-Type': contentTypes[path.extname(file)], 'Cache-Control': 'no-store' }); res.end(await fs.readFile(file));
@@ -190,6 +198,7 @@ export async function createApplication(options = {}) {
   return {
     url:`${origin}/#${token}`,origin,token,server,store,runtime,agent,features,
     async close() {
+      clearInterval(idleTimer);
       agent.cancel();
       await features.close();
       for (let i = 0; agent.active && i < 100; i++) await new Promise(r => setTimeout(r, 50));

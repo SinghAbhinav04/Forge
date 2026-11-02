@@ -14,6 +14,8 @@ Download the package for your OS and CPU from [GitHub Releases](https://github.c
 
 Packages use the same application source and features. Models, native inference runtimes, Whisper and the optional Python training engine are configured separately on each computer. GPU drivers, available memory, model architecture and optional engines determine which operations that computer can run. The first release is unsigned; signing/notarization needs maintainer credentials. Do not disable OS security checks globally.
 
+Settings → General can check GitHub for the latest stable Forge release when you choose **Check for updates**. It does not download or install the update; use the release page to choose the correct package.
+
 ## First model and chat
 
 1. Open Settings → Runtime. Install an official llama.cpp runtime: CPU, CUDA for compatible NVIDIA hardware, or Vulkan where offered. macOS runtimes include Metal. You can select an existing `llama-server` executable instead.
@@ -24,11 +26,19 @@ Packages use the same application source and features. Models, native inference 
 
 Settings include the system prompt, temperature, top-P/top-K/min-P, repeat penalty, seed, context/output limits, thinking mode, template override, CPU threads, GPU layers, KV-cache placement and per-model defaults. Loading settings require a reload. One inference model and one active chat/API task are supported at a time.
 
-Before downloading, model search shows file size and currently reported available memory. File size alone cannot determine whether a model fits; use **Check fit** after download for a model-specific estimate. Model cards show the last generation speed reported by the local runtime for that model and configuration after a successful response; until then, speed is unknown. Results vary with context, settings, model and concurrent work and are not a guaranteed forecast.
+In Runtime settings, an optional idle timer can unload a local model to free memory. It defaults to off, resets during activity and does not unload while a request is running. Models managed by remote servers, including Ollama, are not unloaded by this timer.
+
+Before downloading, model search shows file size and a rough CPU-only fit estimate based on available RAM and the configured context size. Architecture details, projectors, adapters, GPU offload and other allocations are not known at this stage. Split files and unknown sizes show no estimate. Use **Check fit** after download for a model-specific estimate. Model cards show the last generation speed reported by the local runtime for that model and configuration after a successful response; until then, speed is unknown. Results vary with context, settings, model and concurrent work and are not a guaranteed forecast.
+
+For a loaded local model, **Measure speed** runs the same short prompt three times and displays the runtime-reported generation rates, range and configuration. The benchmark requires the runtime to report generation timings; it is cancellable, consumes compute while running and is a measurement for those runs, not a prediction for other tasks.
+
+The model library also checks for an Ollama service on this computer and lists models it reports, without copying or deleting them. Select one to connect; a model may itself use Ollama's cloud services, so check its source in Ollama. When finding a new model, choose a task as a search starting point; search terms go to Hugging Face, and results are not a guarantee of model capabilities.
 
 **Chat** opens by default for new profiles. It has no project file panel, workspace tool calls, or project conversation history. Change its prompt in Settings → Chat. **Workspace** retains project sessions and file tools; its prompt is in Settings → Workspace agent. Existing conversations from before this separation remain in Workspace. Both tabs keep their own last selected conversation, and enabled skills plus each session's own saved notes still apply.
 
 Use **System prompt** beside the composer to save instructions for just that conversation, or choose the app default. You can create/open other chats and prepare their text, image, document and prompt drafts while a reply continues in its original chat. Drafts persist across restarts. Queue one message to send after the current reply; a queue restored after a restart or error waits for you to send it. Pending workspace write approvals remain attached to the original conversation. Hover or focus the small information buttons for explanations.
+
+The system-prompt dialog includes starter prompt presets and lets you save your own. Choosing a preset copies its instructions into the dialog; select **Save prompt** to apply them to the current conversation. Prompt presets do not switch models, enable tools or change permissions.
 
 Settings → Appearance offers only two styles: **ChatGPT**, with a charcoal interface and soft-white 16 px sans-serif conversation text, and **Claude**, with warm paper surfaces, terracotta accents and dark 17 px serif conversation text. Choosing a style applies its colors, fonts and default reading size together; you can adjust conversation size afterward. Both use local system fonts. Theme selection and reading size persist after restart; older palettes migrate to the corresponding dark or light style.
 
@@ -46,7 +56,17 @@ Vision needs a **vision-capable model and its matching `mmproj` GGUF**. Select t
 
 Attach image also works before vision is configured. Choose an image, paste one from the clipboard or drop it onto the composer, then use **Set up vision** to select the matching local projector. The app saves the pair per model and reloads it with a larger image context window while keeping memory guards enabled. Model reload waits until the current response finishes. Common browser-decodable source images are converted to bounded JPEG attachments; unsupported image formats show an error. Up to two images are supported per message.
 
-Workspace tools list/read files and propose writes with stale-file conflict checks. PDF, DOCX and legacy DOC can be read as extracted text; scanned PDFs need OCR first. Native PDF/Word layout editing/export, a built-in terminal, and web browsing are not included. Connect external capabilities through Settings → MCP; each external tool call requires approval. Tool-calling quality depends on the model and its chat template.
+Workspace tools list/read files and propose writes with stale-file conflict checks. PDF, DOCX and legacy DOC can be read as extracted text; scanned PDFs need OCR first. Native PDF/Word layout editing/export and an interactive terminal are not included. Connect external capabilities through Settings → MCP; each external tool call requires approval. Tool-calling quality depends on the model and its chat template.
+
+The optional agent shell-command tool is off by default. Enable it in workspace agent settings to let the agent propose commands, and review each command and working directory before approving it. Commands run on the host without an OS sandbox and can access files and networks beyond the project; the project directory is only the initial working directory. Output and run time are limited, and Stop attempts to terminate the process tree.
+
+**Search web** sends an explicitly entered query and API key to Ollama's online search service. Forge does not save the key. Search results are snippets, not full pages; select snippets to attach them to a message and open their source links separately. Attached snippets are stored with the conversation and sent to the selected model. Web search requires an internet connection and an Ollama account/API key.
+
+For a Git repository opened at its root, **Git status** in the project panel shows the branch and current changes. This overview is read-only; it does not stage, commit or otherwise modify the repository.
+
+Use **Project instructions** in the project panel to provide instructions shared by workspace conversations in that project. They are included along with each conversation's system prompt and are sent to the selected model, including remote providers. General Chat does not receive project instructions.
+
+In a Workspace, expand **Project knowledge** and enter a relative file or folder path, or choose the open project file to index it locally. Folder indexing includes supported files in subfolders, up to 50 files; Forge reports failures and when the limit is reached. Forge retrieves keyword-matched passages for later workspace questions and shows the passages it selected; click a text-file source to open its location. Extracted PDF/Word references do not yet include page numbers. Keyword search can miss relevant text, documents over one million extracted characters are indexed only in part, and changed or missing files must be indexed again. Indexing keeps extracted text in the app data folder; remove a file from the knowledge list to remove its index without deleting the source. Retrieved passages are also saved with the conversation and sent to the selected model, including any remote provider; removing the index does not remove passages already saved in a chat.
 
 Import a skill folder containing `SKILL.md`, or add a Markdown skill, in Settings → Skills. Enabled instructions are loaded into each new model request, shown in chat, and refreshed from disk. The model can request text references from that skill's folder. Skills are instructions, not executable plugins; importing a script does not automatically execute it.
 

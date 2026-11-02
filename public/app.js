@@ -1,12 +1,16 @@
 import { initFeatures } from './features.js';
 import { initHelp } from './help.js';
 import { initJourney } from './journey.js';
+import { initKnowledge } from './knowledge.js';
+import { initProjectGit } from './project-git.js';
+import { initProjectInstructions } from './project-instructions.js';
+import { initWebSearch } from './web-search.js';
 const $ = id => document.getElementById(id);
 const node = (tag, className, text) => { const e = document.createElement(tag); if (className) e.className = className; if (text !== undefined) e.textContent = text; return e; };
 const token = location.hash.slice(1) || sessionStorage.getItem('local-desk-token') || '';
 if (token) { sessionStorage.setItem('local-desk-token', token); history.replaceState(null, '', location.pathname); }
 const state={ data:null,workspaceId:null,sessionId:null,view:'chat',scope:'chat',lastSessions:{chat:null,workspace:null},drafts:new Map(),sessionPrompt:null,navVersion:0,loadingSession:null,run:null,notices:new Map(),folder:'.',file:null,dirty:false,preview:false,sending:false,installing:false,filesVisible:innerWidth>=1000,images:[],documents:[] };
-let searchMatches=null; let searchTicket=0; let searchTimer; let modelRenderKey=''; let historyLimit=100; let streamFrame=0; const streamUpdates=new Map(); let queuedMessage=null; let queueStarting=false; let queueAdding=false; let queuePaused=false;
+let searchMatches=null; let searchTicket=0; let searchTimer; let modelRenderKey=''; let historyLimit=100; let streamFrame=0; const streamUpdates=new Map(); let queuedMessage=null; let queueStarting=false; let queueAdding=false; let queuePaused=false;let benchmarkActive=false;
 const welcome = $('welcome');
 const setupHint = $('setup-hint');
 const workspaceIntro=node('div'); while(welcome.firstChild) workspaceIntro.append(welcome.firstChild);
@@ -17,7 +21,7 @@ const generationBanner=node('div','generation-banner');generationBanner.id='gene
 const queueBanner=node('div','generation-banner');queueBanner.id='queue-banner';queueBanner.hidden=true;const queueLabel=node('span');const queueNow=node('button','text-button','Send queued');queueNow.type='button';const queueRemove=node('button','text-button','Remove');queueRemove.type='button';queueBanner.append(queueLabel,queueNow,queueRemove);generationBanner.after(queueBanner);
 const queueButton=node('button','secondary-button','Queue message');queueButton.id='queue-message';queueButton.type='button';queueButton.hidden=true;$('send').before(queueButton);
 viewGeneration.onclick=()=>{const id=state.run?.current?.id||state.data?.active;if(id)selectSession(id).catch(fail);};stopGeneration.onclick=()=>$('stop-task').click();
-let features; let journey;
+let features; let journey; let projectGit; let projectInstructions;
 let toastTimer;
 function toast(message, error = false) { $('toast').textContent = message; $('toast').classList.toggle('error', error); $('toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('toast').hidden = true; }, error ? 12000 : 4500); }
 function fail(error) { toast(error.message || String(error), true); }
@@ -84,11 +88,13 @@ function showView(view) {
   $('workspace-view').classList.toggle('chat-mode',state.scope==='chat'); chatIntro.hidden=state.scope!=='chat'; workspaceIntro.hidden=state.scope!=='workspace';
   $('mode').value=state.scope==='chat' ? 'chat' : 'agent'; conversationType.textContent=state.scope==='chat' ? 'Chat' : 'Workspace agent';
   $('prompt').placeholder=state.scope==='chat' ? 'Message Forge…' : 'What would you like to work on?';
-  document.querySelector('.composer-caption').firstElementChild.textContent=state.data?.runtime.source==='remote' ? 'Remote model · messages are sent to the configured server' : state.scope==='chat' ? 'Local inference · general conversation' : 'Local inference · writes need your review';
+  document.querySelector('.composer-caption').firstElementChild.textContent=state.data?.runtime.localOllama ? 'Ollama on this computer · check whether your model uses the cloud' : state.data?.runtime.source==='remote' ? 'Remote model · messages are sent to the configured server' : state.scope==='chat' ? 'Local inference · general conversation' : 'Local inference · writes need your review';
   if (view === 'models') renderModels();
   if (view === 'settings') fillSettings();
   if (state.data) features?.render(state.data);
   journey?.render(state.data);
+  projectGit?.render();
+  projectInstructions?.render();
   $('toggle-files').hidden = view !== 'workspace';
   renderEditor();
 }
@@ -110,7 +116,7 @@ function renderSidebar() {
     if (w.id === state.workspaceId) b.append(node('span', 'project-dot'));
     b.onclick = () => switchProject(w.id); $('workspaces').append(b);
   }
-  const sessions=state.data.sessions.filter(s => kind(s)===state.scope && (state.scope==='chat' || s.workspaceId===state.workspaceId) && !s.archived && (!searchMatches || searchMatches.has(s.id))).sort((a,b) => b.updated-a.updated);
+  const sessions=state.data.sessions.filter(s => kind(s)===state.scope && (state.scope==='chat' || s.workspaceId===state.workspaceId) && !s.archived && (!searchMatches || searchMatches.has(s.id))).sort((a,b) => Number(Boolean(b.pinned))-Number(Boolean(a.pinned)) || b.updated-a.updated);
   $('session-count').textContent = sessions.length || '';
   $('sessions').replaceChildren();
   if (!sessions.length) $('sessions').append(node('div', 'empty-sessions', searchMatches ? 'No matching conversations.' : 'A fresh start.\nYour conversations will appear here.'));
@@ -120,7 +126,8 @@ function renderSidebar() {
     b.onclick=() => selectSession(s.id).catch(fail);
     const del = node('button', 'delete-session', '×'); del.title = 'Delete session'; del.setAttribute('aria-label', `Delete ${s.title}`); del.disabled = s.id===generatingId();
     del.onclick=async()=>{if(!confirm(`Delete “${s.title}” and its saved conversation? Project files will remain.`))return;try{await api('/api/session/delete',{method:'POST',body:{id:s.id}});state.data.sessions=state.data.sessions.filter(x=>x.id!==s.id);deleteDraft(s.id);state.notices.delete(s.id);if(state.sessionId===s.id){state.navVersion++;state.sessionId=null;deleteDraft(draftKey());loadDraft();await rememberSelection();}renderSidebar();renderMessages();showView(state.view);renderRuntime();}catch(error){fail(error);}};
-    row.append(b, del); $('sessions').append(row);
+    const pin=node('button','pin-session',s.pinned?'★':'☆');pin.type='button';pin.title=s.pinned?'Unpin conversation':'Pin conversation';pin.setAttribute('aria-label',`${s.pinned?'Unpin':'Pin'} ${s.title}`);pin.onclick=async()=>{pin.disabled=true;try{const updated=await api('/api/session/update',{method:'POST',body:{id:s.id,pinned:!s.pinned}});Object.assign(s,{pinned:updated.pinned,updated:updated.updated});renderSidebar();}catch(error){fail(error);}finally{pin.disabled=false;}};
+    row.append(b,pin,del); $('sessions').append(row);
   }
   $('project-label').textContent = state.scope==='chat' ? 'Chat' : project()?.name || 'Workspace'; $('workspace-path').textContent = project()?.path || ''; $('workspace-path').title = project()?.path || '';
   $('workspaces').hidden=state.scope==='chat'; $('workspaces').previousElementSibling.hidden=state.scope==='chat';
@@ -130,8 +137,8 @@ function renderSidebar() {
 }
 function renderRuntime() {
   const r = state.data.runtime; const isBusy = busy();
-  document.querySelector('.composer-caption').firstElementChild.textContent=r.source==='remote' ? 'Remote model · messages are sent to the configured server' : state.scope==='chat' ? 'Local inference · general conversation' : 'Local inference · writes need your review';
-  chatIntro.querySelector('p').textContent=r.source==='remote' ? 'Ask a question, explore an idea, or just talk. Messages are sent to your configured model server.' : 'Ask a question, explore an idea, or just talk. Your conversation stays on this computer.';
+  document.querySelector('.composer-caption').firstElementChild.textContent=r.localOllama ? 'Ollama on this computer · check whether your model uses the cloud' : r.source==='remote' ? 'Remote model · messages are sent to the configured server' : state.scope==='chat' ? 'Local inference · general conversation' : 'Local inference · writes need your review';
+  chatIntro.querySelector('p').textContent=r.localOllama ? 'Ask a question, explore an idea, or just talk. Messages go to Ollama on this computer; check whether your model uses the cloud.' : r.source==='remote' ? 'Ask a question, explore an idea, or just talk. Messages are sent to your configured model server.' : 'Ask a question, explore an idea, or just talk. Your conversation stays on this computer.';
   const name = shortModel(r.model?.name);
   $('runtime-label').textContent = r.status === 'loading' ? 'Loading model…' : r.status === 'error' ? 'Runtime needs attention' : name;
   $('active-model-label').textContent = r.model ? `${r.status === 'loading' ? 'Loading · ' : ''}${name}` : 'Choose a model';
@@ -156,11 +163,11 @@ function renderRuntime() {
   $('library-runtime-detail').textContent=r.error || (r.status==='loading' ? `${r.phase || 'Loading'} · ${Math.floor((Date.now()-r.started)/1000)}s · you can cancel loading or keep using the editor.` : state.installing ? 'Downloading the official runtime from GitHub…' : state.data.runtimeInstalled ? `${r.vision ? 'Vision + text' : 'Text'} inference · ${state.data.executable}` : 'Install a runtime, or choose your own llama-server executable in Settings.');
   $('models-folder').textContent = state.data.modelError || state.data.settings.modelDir;
   const hint = setupHint; hint.replaceChildren();
-  if (r.status !== 'ready') { hint.append(document.createTextNode(r.status === 'loading' ? 'Your model is loading. ' : 'Ready when you are. ')); const b = node('button', '', state.data.runtimeInstalled ? 'Choose a local model ↗' : 'Set up local inference ↗'); b.onclick = () => showView('models'); hint.append(b); }
+  if (r.status !== 'ready') { hint.append(document.createTextNode(r.status === 'loading' ? 'Your model is loading. ' : r.phase==='Unloaded after inactivity' ? 'Your model was unloaded after inactivity. ' : 'Ready when you are. ')); const b = node('button', '', state.data.runtimeInstalled ? 'Choose a local model ↗' : 'Set up local inference ↗'); b.onclick = () => showView('models'); hint.append(b); }
   if (state.view === 'models') renderModels();
 }
 function renderModels() {
-  const signature=JSON.stringify([state.data.models,state.data.runtime.status,state.data.runtime.model?.path,state.data.runtimeInstalled,busy(),state.installing,state.data.modelConversion?.active,state.data.modelPerformance]);
+  const signature=JSON.stringify([state.data.models,state.data.runtime.status,state.data.runtime.model?.path,state.data.runtimeInstalled,busy(),state.installing,state.data.modelConversion?.active,state.data.modelPerformance,state.data.modelBenchmarks,benchmarkActive]);
   if(signature===modelRenderKey)return; modelRenderKey=signature;
   $('model-list').replaceChildren();
   if (!state.data.models.length) $('model-list').append(node('div', 'empty-state', 'No GGUF models found. Point Settings to a folder containing your .gguf files, then refresh this library.'));
@@ -168,12 +175,14 @@ function renderModels() {
     const active = state.data.runtime.model?.path === model.path;
     const card = node('div', 'model-card'); const info = node('div', 'model-card-info'); info.append(node('strong', '', model.name));
     const meta = node('small'); meta.append(node('span', '', 'GGUF'), document.createTextNode(`${(model.bytes / 1024 ** 3).toFixed(2)} GiB · ${active ? state.data.runtime.status : 'On this device'}`)); info.append(meta);
-    const speed=state.data.modelPerformance?.[model.path];if(speed && speed.modelBytes===model.bytes && Number.isFinite(speed.tokensPerSecond))info.append(node('small','model-speed',`Last measured: ${speed.tokensPerSecond.toFixed(1)} tokens/s · ${speed.mode}${speed.gpuLayers ? ` (${speed.gpuLayers} GPU layers)` : ''} · context ${speed.contextSize}. Speed varies with workload.`));else info.append(node('small','model-speed','Speed not measured yet. Run this model to measure it on your computer.'));
+    const speed=state.data.modelPerformance?.[model.path];if(speed && speed.modelBytes===model.bytes && speed.modelMtimeMs===model.mtimeMs && Number.isFinite(speed.tokensPerSecond))info.append(node('small','model-speed',`Last measured: ${speed.tokensPerSecond.toFixed(1)} tokens/s · ${speed.mode}${speed.gpuLayers ? ` (${speed.gpuLayers} GPU layers)` : ''} · context ${speed.contextSize}. Speed varies with workload.`));else info.append(node('small','model-speed','Speed not measured yet. Run this model to measure it on your computer.'));
+    const benchmark=state.data.modelBenchmarks?.[model.path];if(benchmark && benchmark.modelBytes===model.bytes && benchmark.modelMtimeMs===model.mtimeMs && [benchmark.mean,benchmark.min,benchmark.max].every(Number.isFinite) && Array.isArray(benchmark.samples))info.append(node('small','model-speed',`Benchmark: ${benchmark.mean.toFixed(1)} tokens/s average (${benchmark.min.toFixed(1)}–${benchmark.max.toFixed(1)}, ${benchmark.samples.length} runs) · ${benchmark.mode}, ${benchmark.gpuLayers} GPU layers · context ${benchmark.contextSize || 'unknown'} · ${new Date(benchmark.measuredAt).toLocaleDateString()}. ${benchmark.hardware?.cpu ? `Reported CPU: ${benchmark.hardware.cpu}. ` : ''}${benchmark.hardware?.reportedGpu ? `Reported GPU: ${benchmark.hardware.reportedGpu}. ` : ''}Results vary with workload.`));
     const load = node('button', active ? 'secondary-button' : 'primary-button', active ? state.data.runtime.status === 'loading' ? 'Loading…' : 'Loaded' : state.data.runtimeInstalled ? 'Load model' : 'Set up & load');
     load.disabled = active || busy() || state.data.modelConversion?.active || state.installing || ['loading', 'stopping'].includes(state.data.runtime.status);
     load.onclick = async () => { load.disabled = true; try { if(!state.data.runtimeInstalled){state.installing=true;renderRuntime();await api('/api/runtime/install',{method:'POST',body:{backend:'auto'}});state.installing=false;await refresh();} state.data.runtime = await api('/api/model/load', { method: 'POST', body: { path: model.path } }); renderRuntime(); toast('Loading model. Progress is shown in the runtime logs.'); } catch (error) { state.installing=false;fail(error);modelRenderKey='';renderModels(); } };
     const check=node('button','secondary-button','Check fit');check.type='button';check.onclick=async()=>{check.disabled=true;try{const plan=await api('/api/model/plan',{method:'POST',body:{path:model.path}});let detail=info.querySelector('.model-fit');if(!detail){detail=node('small','model-fit');info.append(detail);}detail.textContent=`${state.data.runtimeInstalled ? '' : 'CPU-only estimate until a runtime is installed. '}Planned ${plan.mode}: estimated ${plan.ramGiB.toFixed(1)} GiB system RAM${plan.vramGiB ? ` · ${plan.vramGiB.toFixed(1)} GiB GPU memory` : ''}. ${plan.errors.length ? plan.errors.join(' ') : 'Estimated to fit currently available memory; actual usage may vary.'}`;}catch(error){fail(error);}finally{check.disabled=false;}};
-    card.append(node('div', 'model-symbol', '◈'), info, check, load); $('model-list').append(card);
+    const bench=node('button','secondary-button',benchmarkActive && active?'Stop benchmark':'Measure speed');bench.type='button';bench.hidden=!active || state.data.runtime.source==='remote' || state.data.runtime.status!=='ready';bench.disabled=!benchmarkActive && busy();bench.onclick=async()=>{if(benchmarkActive){try{await api('/api/model/benchmark/cancel',{method:'POST',body:{}});}catch(error){fail(error);}return;}benchmarkActive=true;modelRenderKey='';renderModels();try{await api('/api/model/benchmark',{method:'POST',body:{}});await refresh();toast('Model benchmark complete.');}catch(error){fail(error);}finally{benchmarkActive=false;modelRenderKey='';renderModels();}};
+    card.append(node('div', 'model-symbol', '◈'), info, check, bench, load); $('model-list').append(card);
   }
 }
 function messageElement(message, streaming = false) {
@@ -190,7 +199,8 @@ function messageElement(message, streaming = false) {
   else body.textContent = message.content || (streaming ? 'Thinking…' : '');
   wrap.append(body);
   if (message.images?.length) { const images=node('div','message-images'); for (const image of message.images) { const picture=node('img'); picture.src=image.url; picture.alt=image.name || 'Attached image'; images.append(picture); } wrap.append(images); }
-  if (message.documents?.length) for(const document of message.documents){const details=node('details','message-document');details.append(node('summary','',`${document.name}${document.truncated?' · excerpt':''}`),node('pre','',document.text));wrap.append(details);}
+  if (message.documents?.length) for(const document of message.documents){const details=node('details','message-document');details.append(node('summary','',`${document.name}${document.truncated?' · excerpt':''}`),node('pre','',document.text));if(document.name.startsWith('Web result: ')){const open=node('button','text-button','Open source');open.type='button';open.onclick=()=>openExternal(document.name.slice('Web result: '.length)).catch(fail);details.append(open);}wrap.append(details);}
+  if (message.sources?.length) {const details=node('details','message-document');details.append(node('summary','',`Retrieved project passages (${message.sources.length})`));for(const source of message.sources){const section=node('div');const open=node('button','text-button',`${source.path}${source.startLine ? `:${source.startLine}-${source.endLine}` : ' · extracted text'}`);open.type='button';open.onclick=async()=>{await openFile(source.path);state.filesVisible=true;renderEditor();if(state.file?.path===source.path && source.startLine){const editor=$('editor'),lines=state.file.content.split('\n');const offset=lines.slice(0,source.startLine-1).reduce((sum,line)=>sum+line.length+1,0);editor.focus();editor.setSelectionRange(offset,Math.min(state.file.content.length,offset+(lines[source.startLine-1]?.length || 0)));}};section.append(open,node('pre','',source.text));details.append(section);}wrap.append(details);}
   if (message.tool_calls) for (const call of message.tool_calls) {
     const details = node('details', 'tool-event'); details.append(node('summary', '', `↳ ${call.function.name}`), node('pre', '', call.function.arguments)); wrap.append(details);
   }
@@ -303,15 +313,15 @@ async function refresh() {
 }
 function approvalCard(event) {
   const pendingRun=state.run;
-  const card=node('div','approval'); card.append(node('div','approval-title',`${event.kind==='mcp' ? 'Review external MCP tool call' : event.exists ? 'Review file replacement' : 'Review new document'} · ${event.path}`),node('p','',event.description || 'The agent is waiting. Applying this proposal writes the following content to your project.'));
+  const card=node('div','approval'); card.append(node('div','approval-title',`${event.kind==='command' ? 'Review shell command' : event.kind==='mcp' ? 'Review external MCP tool call' : event.exists ? 'Review file replacement' : 'Review new document'} · ${event.path}`),node('p','',event.description || 'The agent is waiting. Applying this proposal writes the following content to your project.'));
   const columns = node('div', 'proposal-columns');
   for (const [label, value] of [['Before', event.before || '(new file)'], ['After', event.after]]) { const col = node('div', 'proposal-column'); col.append(node('span', '', label), node('pre', '', value)); columns.append(col); }
-  if(event.kind!=='mcp') { const before=(event.before || '').split('\n'),after=(event.after || '').split('\n');let start=0,endBefore=before.length,endAfter=after.length;while(start<endBefore && start<endAfter && before[start]===after[start])start++;while(endBefore>start && endAfter>start && before[endBefore-1]===after[endAfter-1]){endBefore--;endAfter--;}const changes=[...before.slice(start,endBefore).map(line=>`− ${line}`),...after.slice(start,endAfter).map(line=>`+ ${line}`)].join('\n');const summary=node('details','change-preview');summary.open=true;summary.append(node('summary','','Changes'),node('pre','',changes.slice(0,20000) || 'No text changes.'));if(changes.length>20000)summary.append(node('small','','Preview shortened; the full text is available below.'));card.append(summary); }
-  const full=node('details','proposal-full');full.append(node('summary','','View complete before and after'),columns);
-  const actions=node('div','approval-actions'); const yes=node('button','primary-button',event.kind==='mcp' ? 'Run external tool' : 'Apply write'); const no=node('button','secondary-button','Decline');
+  if(!['mcp','command'].includes(event.kind)) { const before=(event.before || '').split('\n'),after=(event.after || '').split('\n');let start=0,endBefore=before.length,endAfter=after.length;while(start<endBefore && start<endAfter && before[start]===after[start])start++;while(endBefore>start && endAfter>start && before[endBefore-1]===after[endAfter-1]){endBefore--;endAfter--;}const changes=[...before.slice(start,endBefore).map(line=>`− ${line}`),...after.slice(start,endAfter).map(line=>`+ ${line}`)].join('\n');const summary=node('details','change-preview');summary.open=true;summary.append(node('summary','','Changes'),node('pre','',changes.slice(0,20000) || 'No text changes.'));if(changes.length>20000)summary.append(node('small','','Preview shortened; the full text is available below.'));card.append(summary); }
+  const full=node('details','proposal-full');full.append(node('summary','',event.kind==='command'?'View command':'View complete before and after'),event.kind==='command'?node('pre','',event.after):columns);if(event.kind==='command')full.open=true;
+  const actions=node('div','approval-actions'); const yes=node('button','primary-button',event.kind==='command'?'Run command':event.kind==='mcp' ? 'Run external tool' : 'Apply write'); const no=node('button','secondary-button','Decline');
   for (const [button, accept] of [[yes, true], [no, false]]) button.onclick = async () => {
     yes.disabled = true; no.disabled = true;
-    try { await api('/api/approval', { method: 'POST', body: { id: event.id, accept } });pendingRun?.approvals.delete(event.id);renderRuntime(); actions.append(node('span', '', accept ? 'Approved · waiting for save result' : 'Declined')); }
+    try { await api('/api/approval', { method: 'POST', body: { id: event.id, accept } });pendingRun?.approvals.delete(event.id);renderRuntime(); actions.append(node('span', '', accept ? event.kind==='command'?'Approved · waiting for command result':'Approved · waiting for save result' : 'Declined')); }
     catch (error) { fail(error); actions.append(node('span', '', 'Proposal is no longer active.')); }
   };
   actions.append(yes, no); card.append(full, actions); $('messages').append(card); scrollToBottom();
@@ -446,7 +456,12 @@ document.addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.ke
 $('search-chats').addEventListener('input',()=>{const query=$('search-chats').value.trim();const ticket=++searchTicket;clearTimeout(searchTimer);if(!query){searchMatches=null;renderSidebar();return;}searchTimer=setTimeout(async()=>{try{const result=await api(`/api/search/chats?q=${encodeURIComponent(query)}`);if(ticket===searchTicket){searchMatches=new Set(result.ids);renderSidebar();}}catch(error){fail(error);}},200);});
 window.addEventListener('beforeunload', e => { if (state.dirty || state.sending) { e.preventDefault(); e.returnValue = ''; } });
 features=initFeatures({ state,api,refresh,showView,session,busy,toast,fail,askPath,selectSession,newSession,token,renderRuntime,saveDraft });
-journey=initJourney({state,api,refresh,showView,toast,fail,features});
+journey=initJourney({state,api,refresh,showView,toast,fail,features,busy});
+const knowledge=initKnowledge({state,api,fail,toast});
+projectGit=initProjectGit({state,api});
+projectInstructions=initProjectInstructions({state,api,fail});
+const openExternal=async value=>{const url=new URL(value);if(!['http:','https:'].includes(url.protocol) || url.username || url.password)throw new Error('Only HTTP(S) links can be opened.');if(window.desktop?.openExternal)await window.desktop.openExternal(url.href);else window.open(url.href,'_blank','noopener,noreferrer');};
+initWebSearch({state,api,saveDraft,features,renderRuntime,fail,openExternal});
 initHelp();
 installFileHistory();
 window.desktop?.onPrepareQuit?.(async()=>{if(state.data){saveDraft();clearTimeout(draftTimer);await flushDrafts();await draftQueue;}});
@@ -461,6 +476,7 @@ setInterval(async () => {
     renderRuntime();
     await features.tick(state.data);
     await journey?.tick();
+    await knowledge.tick();
     if(queuedMessage && !queuePaused && !busy())void startQueue();
   } catch { /* Preserve the screen during a short connection interruption. */ } finally { polling=false; }
 }, 2000);

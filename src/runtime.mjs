@@ -16,7 +16,7 @@ export async function scanModels(directory) {
       if (entry.isDirectory() && depth < 2 && !entry.name.startsWith('.forge-convert-')) await visit(file, depth + 1);
       else if (entry.isFile() && /\.gguf$/i.test(entry.name) && !/mmproj/i.test(entry.name) && !/-0*(?:[2-9]|[1-9]\d+)-of-\d+\.gguf$/i.test(entry.name)) {
         const info = await fs.stat(file);
-        models.push({ path: file, name: entry.name.replace(/\.gguf$/i, ''), bytes: info.size });
+        models.push({ path: file, name: entry.name.replace(/\.gguf$/i, ''), bytes: info.size,mtimeMs:info.mtimeMs });
       }
     }
   };
@@ -34,7 +34,7 @@ export async function availablePort() {
 
 export class Runtime {
   constructor(appRoot, runtimeDir = path.join(appRoot, 'runtime')) { this.appRoot = appRoot; this.runtimeDir = runtimeDir; this.child = null; this.status = 'stopped'; this.model = null; this.logs = []; this.error = ''; this.busy = false; }
-  snapshot() { return { status:this.status,model:this.model,error:this.error,logs:this.logs.slice(-100),busy:this.busy,phase:this.phase || '',plan:this.plan || null,started:this.started || null,source:this.remote ? 'remote' : 'local',offload:this.offloadEvidence || [],adapters:this.loadedAdapters || [],vision:Boolean(this.configuration?.vision),contextSize:this.configuration?.contextSize || null }; }
+  snapshot() { return { status:this.status,model:this.model,error:this.error,logs:this.logs.slice(-100),busy:this.busy,phase:this.phase || '',plan:this.plan || null,started:this.started || null,source:this.remote ? 'remote' : 'local',localOllama:Boolean(this.remote && /^http:\/\/(?:127\.0\.0\.1|localhost):11434\/v1\/?$/.test(this.remote.base)),offload:this.offloadEvidence || [],adapters:this.loadedAdapters || [],vision:Boolean(this.configuration?.vision),contextSize:this.configuration?.contextSize || null }; }
   log(chunk) {
     const text=String(chunk); this.logs.push(...text.split(/\r?\n/).filter(Boolean).map(line => line.length>1500 ? `${line.slice(0,1500)}… [line shortened]` : line)); this.logs=this.logs.slice(-120);
     const evidence=text.split(/\r?\n/).filter(l => /offload.*layers?|layers?.*offload/i.test(l)); if (evidence.length) this.offloadEvidence=[...(this.offloadEvidence || []),...evidence].slice(-8);
@@ -134,7 +134,7 @@ export class Runtime {
       if(ready && this.child===child && this.status==='loading') {
         try { if(this.loadedAdapters?.length) { const apply=await fetch(`http://127.0.0.1:${this.port}/lora-adapters`,{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${this.key}`},body:JSON.stringify(this.loadedAdapters.map((a,id)=>({id,scale:a.scale}))),signal:AbortSignal.timeout(5000)});if(!apply.ok)throw new Error(`The model could not activate its LoRA adapters (${apply.status}). Check the adapter and base model.`); } }
         catch(error){await this.stop();this.status='error';this.error=error.message;return;}
-        if(this.child===child && this.status==='loading'){this.status='ready';this.phase='Ready';clearInterval(this.memoryTimer);}return;
+        if(this.child===child && this.status==='loading'){this.status='ready';this.phase='Ready';this.lastActivity=Date.now();clearInterval(this.memoryTimer);}return;
       }
       await delay(800);
     }
@@ -142,6 +142,7 @@ export class Runtime {
   }
   async completion(body, signal) {
     if (this.status !== 'ready') throw new Error('Load a model and wait for it to be ready.');
+    this.lastActivity=Date.now();
     const base = this.remote?.base || `http://127.0.0.1:${this.port}/v1`;
     const result = await fetch(`${base}/chat/completions`, { method:'POST', headers:{ 'Content-Type':'application/json',Authorization:`Bearer ${this.remote?.key || this.key}` }, body:JSON.stringify({ ...body,model:this.model.name }), signal });
     if (!result.ok) { const message = (await result.text()).slice(0, 2000); throw new Error(`Inference failed (${result.status}): ${message}`); }

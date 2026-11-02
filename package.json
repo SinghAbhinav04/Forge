@@ -1,6 +1,6 @@
 {
   "name": "forge-desktop",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "description": "Forge: a private desktop workspace for local AI, documents and training",
   "author": {
@@ -29,6 +29,9 @@
     "test:desktop": "node scripts/smoke-desktop.mjs",
     "test:conversion": "node scripts/smoke-model-conversion.mjs",
     "test:journey": "node scripts/smoke-journey.mjs",
+    "test:knowledge": "node scripts/smoke-knowledge.mjs",
+    "test:commands": "node scripts/smoke-commands.mjs",
+    "test:benchmark": "node scripts/smoke-benchmark.mjs",
     "pack": "electron-builder --dir",
     "dist:win": "electron-builder --win nsis --x64",
     "dist:mac": "electron-builder --mac dmg --arm64 --x64",

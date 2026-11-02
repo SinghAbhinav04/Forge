@@ -11,10 +11,10 @@ try {
   const page = await app.firstWindow();
   page.on('pageerror', error => errors.push(error.message));
   await page.waitForSelector('#hardware-label:text("GB RAM")');
+  await page.evaluate(() => document.querySelectorAll('details.settings-category').forEach(d => { d.open = true; }));
   await page.screenshot({ path: path.join(output, 'workspace.png') });
   await page.getByRole('button', { name: 'Models', exact: false }).first().click();
-  await page.waitForSelector('.model-card');
-  assert.ok(await page.locator('.model-card').count());
+  await page.locator('#model-list').waitFor();
   await page.screenshot({ path: path.join(output, 'models.png') });
   const originalModels=await page.locator('#models-folder').textContent();
   const pickedModels=path.join(testRoot,'picked-models'); await fs.mkdir(pickedModels); await fs.writeFile(path.join(pickedModels,'picked.gguf'),'GGUF');

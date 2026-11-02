@@ -53,6 +53,7 @@ else {
     });
     ipcMain.handle('toggle-devtools',event => { if (!trusted(event)) throw new Error('Untrusted renderer.'); window.webContents.toggleDevTools(); });
     ipcMain.handle('release-page',event => { if (!trusted(event)) throw new Error('Untrusted renderer.'); return shell.openExternal('https://github.com/SinghAbhinav04/Forge/releases'); });
+    ipcMain.handle('open-external',(event,value) => { if(!trusted(event))throw new Error('Untrusted renderer.');const url=new URL(value);if(!['http:','https:'].includes(url.protocol) || url.username || url.password)throw new Error('Only HTTP(S) links can be opened.');return shell.openExternal(url.href); });
     window=new BrowserWindow({ title:'Forge',width:1450,height:960,minWidth:1000,minHeight:680,backgroundColor:'#111315',autoHideMenuBar:true,icon:path.join(__dirname,'../public/icon.png'),webPreferences:{ preload:path.join(__dirname,'preload.cjs'),nodeIntegration:false,contextIsolation:true,sandbox:true,backgroundThrottling:false } });
     window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     window.webContents.on('will-navigate', (event, url) => { if (new URL(url).origin !== origin) event.preventDefault(); });

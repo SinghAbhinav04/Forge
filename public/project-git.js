@@ -1,0 +1,7 @@
+const $=id=>document.getElementById(id);
+export function initProjectGit(ctx){
+  const panel=document.createElement('details');panel.className='project-git';panel.id='project-git';panel.innerHTML='<summary>Git status</summary><p>Read-only repository overview. Forge does not run Git actions here.</p><button type="button" id="project-git-refresh" class="text-button">Refresh</button><pre id="project-git-status">Open to inspect the repository.</pre>';$('file-list').before(panel);let inFlight=false;
+  async function refresh(){if(inFlight || !panel.open || ctx.state.scope!=='workspace' || !ctx.state.workspaceId)return;inFlight=true;const id=ctx.state.workspaceId;$('project-git-status').textContent='Checking repository…';try{const result=await ctx.api(`/api/project/git?workspaceId=${encodeURIComponent(id)}`);if(id!==ctx.state.workspaceId)return;$('project-git-status').textContent=result.available ? `${result.branch || 'Branch unavailable'}\n${result.changes.length ? result.changes.join('\n') : 'No changes'}${result.truncated ? '\nAdditional changes omitted.' : ''}` : result.reason;}catch(error){if(id===ctx.state.workspaceId)$('project-git-status').textContent=error.message;}finally{inFlight=false;if(id!==ctx.state.workspaceId)void refresh();}}
+  panel.addEventListener('toggle',()=>{if(panel.open)void refresh();});$('project-git-refresh').onclick=()=>void refresh();
+  let previous;return {render(){if(previous!==ctx.state.workspaceId){previous=ctx.state.workspaceId;if(panel.open)void refresh();}}};
+}

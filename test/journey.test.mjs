@@ -14,9 +14,38 @@ import { Agent } from '../src/agent.mjs';
 import { fitContext } from '../src/context.mjs';
 import { runtimeGpuMemory,memoryPlan,recommendedRuntime } from '../src/hardware.mjs';
 import { modelWeightBytes } from '../src/trainer.mjs';
+import { diagnostics } from '../src/diagnostics.mjs';
+import { localOllamaModels } from '../src/ollama.mjs';
+import { activityJobs } from '../src/activity.mjs';
+import { estimateDownload } from '../src/model-advisor.mjs';
 
 async function fixture(t){const root=await fs.mkdtemp(path.join(os.tmpdir(),'forge-journey-'));t.after(()=>fs.rm(root,{recursive:true,force:true}));const store=await openStore(root);return {root,store};}
 const apiFor=app=>async(route,body)=>{const response=await fetch(app.origin+route,{method:body===undefined?'GET':'POST',headers:{'Content-Type':'application/json','X-Local-Desk-Token':app.token},...(body===undefined?{}:{body:JSON.stringify(body)})});return {status:response.status,value:await response.json()};};
+
+test('shareable diagnostics report the actual version and do not leak local paths, logs or credentials',async t=>{
+ const {store}=await fixture(t);store.state.settings.runtimePath='/secret/model/path';store.state.apiKey='secret-api-key';
+ const runtime={status:'error',logs:['secret-log'],error:'secret-error',busy:false,executable:async()=>'/secret/model/path'};
+ const device={platform:'test',arch:'test',ramGiB:8,freeGiB:4,cores:4,cpu:'test',gpu:null,unifiedMemory:false};
+ const result=await diagnostics({runtime,hardware:async()=>device,store,trainer:{job:{status:'error',error:'secret-trainer-error'}}});
+ assert.equal(result.version,JSON.parse(await fs.readFile(new URL('../package.json',import.meta.url),'utf8')).version);
+ assert.equal(result.runtime.installed,true);assert.equal(result.training.status,'error');assert.doesNotMatch(JSON.stringify(result),/secret/);
+});
+
+test('local Ollama discovery reports supplied model metadata without guessing capabilities',async()=>{
+ let requested;const models=await localOllamaModels({fetchImpl:async url=>{requested=url;return new Response(JSON.stringify({models:[{name:'model:latest',size:1024,details:{format:'gguf',quantization_level:'Q4_K_M'}},{name:3}]}));}});
+ assert.equal(requested,'http://127.0.0.1:11434/api/tags');assert.deepEqual(models,[{id:'model:latest',bytes:1024,format:'gguf',quantization:'Q4_K_M'}]);
+ await assert.rejects(()=>localOllamaModels({fetchImpl:async()=>new Response('{}')}),/invalid model list/);
+});
+
+test('activity exposes consistent states without leaking job contents',()=>{
+ const jobs=activityJobs({downloads:[{id:'a',status:'downloading',bytes:100,received:25,name:'private filename'},{id:'b',status:'error'}],training:{job:{id:'c',status:'paused',config:{dataset:'private path'}}},conversion:{job:{id:'d',status:'interrupted'}},runtime:{status:'loading',phase:'Reading model'}});
+ assert.equal(jobs.find(j=>j.id==='download:a').status,'running');assert.equal(jobs.find(j=>j.id==='download:b').status,'failed');assert.equal(jobs.find(j=>j.kind==='training').status,'paused');assert.equal(jobs.find(j=>j.kind==='conversion').status,'interrupted');assert.equal(jobs.find(j=>j.kind==='runtime').status,'running');assert.equal(jobs[0].progress,.25);assert.equal(jobs[1].progress,null);assert.doesNotMatch(JSON.stringify(jobs),/private/);
+});
+
+test('newer storage versions are not silently downgraded or overwritten',async t=>{
+ const {root,store}=await fixture(t);const file=path.join(store.dataDir,'state.json');const state=JSON.parse(await fs.readFile(file,'utf8'));state.version=999;const original=JSON.stringify(state);await fs.writeFile(file,original);
+ await assert.rejects(()=>openStore(root,store.dataDir),/unsupported format version/);assert.equal(await fs.readFile(file,'utf8'),original);
+});
 
 test('automatic execution chooses CPU without a GPU and keeps manual choices',async()=>{
  const runtime=new Runtime('.');runtime.devices=async()=>[];
@@ -34,6 +63,12 @@ test('automatic runtime selection requires a compatible reported NVIDIA driver a
  assert.equal(recommendedRuntime({...nvidia,gpu:null}),'cpu');
  assert.equal(recommendedRuntime({...nvidia,platform:'darwin',arch:'arm64'}),'cpu');
  assert.equal(recommendedRuntime({...nvidia,platform:'win32',gpu:{...nvidia.gpu,cudaVersion:'12.4'}}),'cuda');
+});
+
+test('pre-download fit advice remains CPU-only and refuses incomplete file estimates',()=>{
+ const settings={contextSize:2048,reserveRamGiB:2};const device={freeGiB:12,unifiedMemory:false};const model={name:'example.gguf',kind:'model',bytes:2*1024**3};
+ const result=estimateDownload(model,settings,device);assert.equal(result.status,'possible');assert.match(result.reason,/CPU-only/);assert.match(result.reason,/GPU offload is not included/);
+ assert.equal(estimateDownload({...model,bytes:32*1024**3},settings,device).status,'unlikely');assert.equal(estimateDownload({...model,name:'example-00001-of-00003.gguf'},settings,device).status,'unknown');assert.equal(estimateDownload({...model,kind:'projector'},settings,device).status,'unknown');
 });
 
 test('automatic planning falls back to CPU when GPU memory is unknown or too small',async()=>{
@@ -99,6 +134,12 @@ test('draft and queue APIs persist, protect queued conversations, and permit exp
  assert.equal((await api('/api/session/delete',{id:created.id})).status,400);assert.equal((await api('/api/queue')).value.message.text,'later');
  assert.equal((await api('/api/queue',{clear:true,id:'wrong'})).status,400);assert.equal((await api('/api/queue',{clear:true,id:queued.id})).status,200);
  assert.equal((await api('/api/drafts')).value[created.id].text,'unfinished');assert.equal((await api('/api/session/delete',{id:created.id})).status,200);
+});
+
+test('conversation pins persist and can be changed while a model is busy',async t=>{
+ const {root}=await fixture(t);const app=await createApplication({appRoot:root});t.after(()=>app.close());const api=apiFor(app);const created=(await api('/api/sessions',{kind:'chat'})).value;
+ app.runtime.busy=true;assert.equal((await api('/api/session/update',{id:created.id,pinned:true})).status,200);assert.equal((await api('/api/session/update',{id:created.id,title:'Blocked'})).status,400);app.runtime.busy=false;
+ const reopened=await openStore(root,app.store.dataDir);assert.equal(reopened.state.sessions.find(s=>s.id===created.id).pinned,true);
 });
 
 test('storage preview protects current datasets and latest checkpoints',async t=>{

@@ -21,7 +21,10 @@ export async function openStore(appRoot, dataDir = path.join(appRoot, '.data'), 
     if (workspaceDir) { try { await fs.copyFile(path.join(appRoot,'workspace','Welcome.md'), path.join(workspace,'Welcome.md'), (await import('node:fs')).constants.COPYFILE_EXCL); } catch (e) { if (!['EEXIST','ENOENT'].includes(e.code)) throw e; } }
     state = { version:2, settings:{ ...defaults(appRoot), ...(defaultModelDir ? { modelDir:defaultModelDir } : {}) }, workspaces:[{ id:randomUUID(), name:'My workspace', path:workspace }], sessions:[] };
   }
+  if(state.version!==undefined && state.version!==1 && state.version!==2)throw new Error(`This Forge data uses an unsupported format version (${String(state.version)}). Open it with a compatible version of Forge.`);
   const old = state.settings || {}; state.settings = { autoGpuLayers:true,chatSystemPrompt:DEFAULT_CHAT_PROMPT,...defaults(appRoot), ...old };
+  state.settings.idleUnloadMinutes ??= 0;
+  state.settings.allowCommandTools ??= false;
   state.settings.theme=normalizeTheme(state.settings.theme);
   if (!old.themeStyleVersion) { state.settings.fontSize=THEMES.find(theme => theme.id===state.settings.theme).fontSize; state.settings.themeStyleVersion=1; }
   if (!old.performanceMode) { state.settings.threads = Math.min(2,state.settings.threads); state.settings.kvOnGpu = false; state.settings.executionMode = old.gpuLayers > 0 ? 'hybrid' : 'cpu'; }
