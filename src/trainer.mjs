@@ -3,7 +3,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { spawn,execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { prepareDataset } from './datasets.mjs';
+import { reviewedDataset } from './datasets.mjs';
 export const trainingPython = dataDir => path.join(dataDir,'training-env',process.platform==='win32' ? 'Scripts/python.exe' : 'bin/python');
 const run = (command,args,options={}) => new Promise((resolve,reject) => execFile(command,args,{ windowsHide:true,timeout:20000,...options },(error,stdout) => error ? reject(error) : resolve(stdout)));
 const externalScript=(root,name) => path.join(root.endsWith('.asar') ? `${root}.unpacked` : root,'scripts',name);
@@ -28,11 +28,12 @@ export class Trainer {
   }
   async start(input) {
     if (this.child || !['stopped','error'].includes(this.runtime.status)) throw new Error('Unload the inference model before training to keep memory available.');
+    if (input.confirmedPreview!==true) throw new Error('Review the original and prepared examples, then confirm the training preview.');
+    const imported=await reviewedDataset(input.reviewId,input.dataset,this.store.dataDir);
     const env=await trainingEnvironment(this.store.dataDir); if (!env.installed) throw new Error('Install the optional training engine first.');
     if (typeof input.baseModel!=='string' || !path.isAbsolute(input.baseModel) || /\.gguf$/i.test(input.baseModel)) throw new Error('Choose a local Hugging Face model folder, not a GGUF file. Training produces a LoRA adapter.');
     await fs.access(path.join(input.baseModel,'config.json'));
-    const imported=await prepareDataset(input.dataset,this.store.dataDir);
-    const config={ baseModel:input.baseModel,dataset:imported.path,datasetSource:input.dataset,datasetMode:imported.mode,datasetExamples:imported.examples,device:input.device || 'cpu' };
+    const config={ baseModel:input.baseModel,dataset:imported.path,datasetSource:input.dataset,datasetMode:imported.mode,datasetExamples:imported.examples,selectedSpeaker:imported.selectedSpeaker,lossMode:imported.lossMode,device:input.device || 'cpu' };
     for (const [key,defaultValue,min,max,integer] of [['epochs',1,0.1,20,false],['learningRate',0.0002,0.000001,0.1,false],['batchSize',1,1,4,true],['gradientAccumulation',4,1,32,true],['maxLength',256,32,2048,true],['loraRank',8,2,64,true],['saveEvery',10,1,1000,true],['maxSteps',100,1,100000,true]]) { const v=input[key] ?? defaultValue; if (typeof v!=='number' || !Number.isFinite(v) || v<min || v>max || (integer && !Number.isInteger(v))) throw new Error(`Invalid training ${key}.`); config[key]=v; }
     if (!['cpu','cuda','mps'].includes(config.device)) throw new Error('Select CPU, CUDA or Apple Metal.');
     if (config.device==='cuda' && !env.cuda) throw new Error('The training engine has no CUDA support. Use CPU, or install a CUDA-enabled PyTorch build into the displayed training environment.');

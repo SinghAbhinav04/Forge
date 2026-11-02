@@ -54,6 +54,9 @@ jobs:
       - name: Check background generation, prompts, images and themes
         if: matrix.platform == 'windows' && matrix.arch == 'x64'
         run: node scripts/smoke-composer.mjs
+      - name: Check training participant selection and data review
+        if: matrix.platform == 'windows' && matrix.arch == 'x64'
+        run: node scripts/smoke-dataset-review.mjs
       - name: Check release tag matches package version
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash

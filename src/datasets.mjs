@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { randomUUID,createHash } from 'node:crypto';
+import { textChat,jsonChats,prepareChats } from './dataset-chats.mjs';
 import mammoth from 'mammoth';
 import WordExtractor from 'word-extractor';
 import { parse as csv } from 'csv-parse/sync';
@@ -9,12 +10,12 @@ const assistantRoles=new Set(['assistant','ai','bot','gpt','chatgpt','answer','r
 const contentText=value => typeof value==='string' ? value : Array.isArray(value) ? value.map(v => typeof v==='string' ? v : v?.type==='text' ? v.text : '').filter(Boolean).join('\n') : '';
 export function normalizeMessages(source) {
   if (!Array.isArray(source)) throw new Error('Conversation messages must be an array.');
-  const messages=[]; const names=new Map();
+  const messages=[];
   for (const item of source) {
     if (!item || typeof item!=='object') throw new Error('Invalid message record.');
     const label=String(item.role ?? item.from ?? item.sender ?? item.speaker ?? item.author?.role ?? item.author ?? '').toLowerCase().replace(/[\s_-]/g,'');
     let role=label==='system' ? 'system' : userRoles.has(label) ? 'user' : assistantRoles.has(label) ? 'assistant' : null;
-    if (!role && label) { if (!names.has(label)) names.set(label,names.size===0 ? 'user' : 'assistant'); if (names.size>2) throw new Error('More than two unrecognized speakers. Preprocess them into user/assistant roles.'); role=names.get(label); }
+    if (!role && label) throw new Error('Named speakers need participant selection. Use the training preview to choose whose replies to learn.');
     if (!role) throw new Error('A message has no recognizable role/speaker. Preprocess it into user/assistant messages.');
     const content=contentText(item.content?.parts || item.content || item.value || item.text || item.message).trim();
     if (!content || /^<media omitted>$/i.test(content)) continue;
@@ -86,16 +87,38 @@ export async function extractDocument(file) {
   if (['.txt','.md','.json','.jsonl','.csv','.tsv'].includes(extension)) return decode(await fs.readFile(file));
   throw new Error('Supported imports: PDF, DOCX, DOC, TXT, Markdown, JSON, JSONL, CSV and TSV. Preprocess other formats.');
 }
-export async function prepareDataset(file,dataDir) {
+const digest=bytes => createHash('sha256').update(bytes).digest('hex');
+export async function prepareDataset(file,dataDir,options={}) {
   if (typeof file!=='string' || !path.isAbsolute(file)) throw new Error('Choose an absolute local dataset/document path.');
-  const extension=path.extname(file).toLowerCase(); const text=await extractDocument(file); let rows; let mode; let warnings=[];
+  const extension=path.extname(file).toLowerCase();
+  const info=await fs.stat(file); if (!info.isFile() || info.size>32*1024**2) throw new Error('Choose a document smaller than 32 MiB.');
+  const sourceHash=digest(await fs.readFile(file)); const text=await extractDocument(file); let rows; let mode; let warnings=[]; let review={}; let chat;
   try {
-    if (extension==='.json') { rows=normalizeJson(JSON.parse(text)); mode='structured JSON'; }
-    else if (extension==='.jsonl') { rows=normalizeJson(text.split(/\r?\n/).filter(l => l.trim()).map((line,i) => { try { return JSON.parse(line); } catch { throw new Error(`Invalid JSON on line ${i+1}.`); } })); mode='JSONL'; }
-    else if (['.csv','.tsv'].includes(extension)) { const records=csv(text,{ columns:headers => headers.map(h => h.trim().toLowerCase()),delimiter:extension==='.tsv' ? '\t' : ',',skip_empty_lines:true,bom:true }); rows=normalizeJson(records); mode='tabular records'; }
-    else ({ rows,mode,warnings }=normalizeText(text));
+    let document;
+    if (extension==='.json') { document=JSON.parse(text); mode='structured JSON'; }
+    else if (extension==='.jsonl') { document=text.split(/\r?\n/).filter(l => l.trim()).map((line,i) => { try { return JSON.parse(line); } catch { throw new Error(`Invalid JSON on line ${i+1}.`); } }); mode='JSONL'; }
+    else if (['.csv','.tsv'].includes(extension)) { document=csv(text,{ columns:headers => headers.map(h => h.trim().toLowerCase()),delimiter:extension==='.tsv' ? '\t' : ',',skip_empty_lines:true,bom:true }); mode='tabular records'; }
+    chat=document ? jsonChats(document) : textChat(text);
+    review=chat ? prepareChats(chat,options.selectedSpeaker) : null;
+    if (review?.needsSelection) return { ...review,source:file,originalSample:text.slice(0,5000),examples:0,preview:[] };
+    if (review) ({ rows,mode,warnings }=review);
+    else if (document) rows=normalizeJson(document);
+    else ({rows,mode,warnings}=normalizeText(text));
   } catch (error) { throw new Error(`Import rejected: ${error.message} Please preprocess ambiguous or invalid records and try again.`); }
   if (!rows?.length) throw new Error('No usable training examples. Please preprocess the source.');
-  const directory=path.join(dataDir,'datasets'); await fs.mkdir(directory,{ recursive:true }); const output=path.join(directory,`${randomUUID()}.jsonl`); await fs.writeFile(output,rows.map(r => JSON.stringify(r)).join('\n')+'\n');
-  return { path:output,source:file,mode,examples:rows.length,warnings,preview:rows.slice(0,3),bytes:Buffer.byteLength(text),messages:rows.reduce((n,r) => n+(r.messages?.length || 0),0) };
+  // Prepared chat rows always mask incoming turns. Documents deliberately use text loss.
+  rows=rows.map(row=>row.messages ? {...row,assistant_only:true} : row);
+  if (digest(await fs.readFile(file))!==sourceHash) throw new Error('Source changed during import. Preview the file again.');
+  const directory=path.join(dataDir,'datasets'); await fs.mkdir(directory,{ recursive:true }); const reviewId=randomUUID(); const output=path.join(directory,`${reviewId}.jsonl`); const prepared=rows.map(r=>JSON.stringify(r)).join('\n')+'\n'; await fs.writeFile(output,prepared);
+  const result={ path:output,reviewId,source:file,mode,examples:rows.length,warnings,preview:rows.slice(0,3),originalSample:text.slice(0,5000),samples:review?.samples || [],participants:review?.participants || [],selectedSpeaker:review?.selectedSpeaker || null,requiresSpeaker:!!review?.requiresSpeaker,needsSelection:false,lossMode:review?.lossMode || (rows.some(r=>r.messages) ? 'assistant replies only' : 'all document text'),bytes:Buffer.byteLength(text),messages:rows.reduce((n,r)=>n+(r.messages?.length || 0),0) };
+  await fs.writeFile(path.join(directory,`${reviewId}.review.json`),JSON.stringify({ source:file,sourceHash,preparedHash:digest(prepared),mode,examples:rows.length,selectedSpeaker:result.selectedSpeaker,lossMode:result.lossMode }));
+  return result;
+}
+
+export async function reviewedDataset(reviewId,source,dataDir) {
+  if (typeof reviewId!=='string' || !/^[a-f0-9-]{36}$/.test(reviewId)) throw new Error('Preview the training source and confirm the prepared examples before starting.');
+  const directory=path.join(dataDir,'datasets'); const output=path.join(directory,`${reviewId}.jsonl`);
+  let review; try { review=JSON.parse(await fs.readFile(path.join(directory,`${reviewId}.review.json`),'utf8')); } catch { throw new Error('Training preview is missing. Preview and confirm the source again.'); }
+  if (review.source!==source || digest(await fs.readFile(source))!==review.sourceHash || digest(await fs.readFile(output))!==review.preparedHash) throw new Error('Training source or prepared data changed after preview. Preview and confirm it again.');
+  return { ...review,path:output };
 }

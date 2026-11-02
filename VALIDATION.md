@@ -1,3 +1,7 @@
+# Forge 0.2.7 training-data checks
+
+41 backend checks pass, including WhatsApp Android/iOS imports, Unicode/group speakers, Instagram chronological ordering, target selection, original/prepared previews and changed-file rejection. The desktop review regression passes with a separate test profile: explicit selection, comparison samples, confirmation, and source/speaker invalidation. Four real-tokenizer checks verify reply-only labels, context masking, padding, truncation and unsupported-template rejection. Tiny-model LoRA training verifies actual updates and checkpoint controls; this does not establish personalization quality on a real chat corpus. No physical macOS training test was performed.
+
 # Forge 0.2.6 verification
 
 ## Automated checks

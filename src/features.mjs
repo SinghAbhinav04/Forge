@@ -69,7 +69,7 @@ export function createFeatures({ appRoot,store,runtime,agent,models,workspaceByI
       if (route==='/api/local-api/control' && method==='POST') return post(async input => { if (input.action==='start') return localApi.start(store.state.settings.apiHost,store.state.settings.apiPort); if (input.action==='stop') { await localApi.stop(); return localApi.snapshot(); } throw new Error('Unknown API action.'); });
       if (route==='/api/trainer' && method==='GET') { json(res,200,{ ...trainer.snapshot(),loras:adapters.snapshot() }); return true; }
       if (route==='/api/trainer/environment' && method==='GET') { json(res,200,await trainingEnvironment(store.dataDir)); return true; }
-      if (route==='/api/trainer/prepare' && method==='POST') return post(async input => prepareDataset(input.path,store.dataDir));
+      if (route==='/api/trainer/prepare' && method==='POST') return post(async input => prepareDataset(input.path,store.dataDir,{selectedSpeaker:input.selectedSpeaker}));
       if (route==='/api/trainer/install' && method==='POST') return post(async () => trainer.install());
       if (route==='/api/trainer/start' && method==='POST') return post(async input => trainer.start(input));
       if (route==='/api/trainer/control' && method==='POST') return post(async input => trainer.control(input.action));

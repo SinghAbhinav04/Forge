@@ -1,6 +1,6 @@
 {
   "name": "forge-desktop",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "private": true,
   "description": "Forge: a private desktop workspace for local AI, documents and training",
   "author": {
@@ -67,14 +67,14 @@
       ]
     },
     "nsis": {
-      "packElevateHelper":false,
-      "perMachine":false,
+      "packElevateHelper": false,
+      "perMachine": false,
       "oneClick": false,
-      "allowToChangeInstallationDirectory":true,
-      "createDesktopShortcut":true,
-      "createStartMenuShortcut":true,
-      "shortcutName":"Forge",
-      "runAfterFinish":false
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Forge",
+      "runAfterFinish": false
     },
     "mac": {
       "extendInfo": {
@@ -87,8 +87,14 @@
       ]
     },
     "linux": {
-      "executableName":"forge",
-      "desktop":{ "entry":{ "Name":"Forge","StartupWMClass":"Forge","Comment":"Local AI workspace, models and training" } },
+      "executableName": "forge",
+      "desktop": {
+        "entry": {
+          "Name": "Forge",
+          "StartupWMClass": "Forge",
+          "Comment": "Local AI workspace, models and training"
+        }
+      },
       "category": "Utility",
       "target": [
         "AppImage",

@@ -138,7 +138,7 @@ export async function createApplication(options = {}) {
         }
         json(res, 404, { error: 'API route not found.' }); return;
       }
-      const staticFiles = { '/':'index.html','/app.js':'app.js','/features.js':'features.js','/composer.js':'composer.js','/themes.js':'themes.js','/themes.css':'themes.css','/styles.css':'styles.css','/features.css':'features.css','/icon.svg':'icon.svg' };
+      const staticFiles = { '/':'index.html','/app.js':'app.js','/features.js':'features.js','/training-data.js':'training-data.js','/composer.js':'composer.js','/themes.js':'themes.js','/themes.css':'themes.css','/styles.css':'styles.css','/features.css':'features.css','/icon.svg':'icon.svg' };
       if (req.method !== 'GET' || !staticFiles[route]) { json(res, 404, { error: 'Not found.' }); return; }
       const file = path.join(APP_ROOT, 'public', staticFiles[route]);
       res.writeHead(200, { 'Content-Type': contentTypes[path.extname(file)], 'Cache-Control': 'no-store' }); res.end(await fs.readFile(file));

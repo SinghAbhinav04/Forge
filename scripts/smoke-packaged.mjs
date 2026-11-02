@@ -23,7 +23,7 @@ try {
   await page.locator('#setting-contextSize').waitFor();
   assert.ok(Number(await page.locator('#setting-contextSize').inputValue()) >= 512);
   for (const name of ['chat.pdf','chat.docx']) {
-    const result=await page.evaluate(async file => { const r=await fetch('/api/trainer/prepare',{ method:'POST',headers:{ 'Content-Type':'application/json','X-Local-Desk-Token':sessionStorage.getItem('local-desk-token') },body:JSON.stringify({ path:file }) }); return r.json(); },path.join(fixture,name));
+    const result=await page.evaluate(async file => { const r=await fetch('/api/trainer/prepare',{ method:'POST',headers:{ 'Content-Type':'application/json','X-Local-Desk-Token':sessionStorage.getItem('local-desk-token') },body:JSON.stringify({ path:file,selectedSpeaker:'User2' }) }); return r.json(); },path.join(fixture,name));
     assert.equal(result.examples,1,JSON.stringify(result)); assert.ok(result.preview[0].messages[1].content.includes('works'));
   }
   assert.equal(await app.evaluate(({ app }) => app.getName()),'Forge');

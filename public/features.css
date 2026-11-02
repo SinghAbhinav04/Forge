@@ -2,3 +2,10 @@
 
 .message-images{display:flex;gap:10px;margin:12px 0 0 32px}.message-images img{max-width:260px;max-height:190px;object-fit:contain;border:1px solid var(--line);border-radius:8px}.pending-images{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px}.pending-image{display:flex;align-items:center;gap:9px;border:1px solid var(--line);border-radius:8px;padding:7px;max-width:300px;background:var(--panel)}.pending-image img{width:52px;height:46px;object-fit:cover;border-radius:4px}.pending-image small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.message-metrics{font-size:9px;color:#91a47f}.composer-skill-label{margin-right:auto;max-width:70%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:9px;color:#96aa87}.adapter-scale{width:70px!important;padding:7px}.feature-row>input[type=checkbox]{width:17px;height:17px;accent-color:var(--green)}
 .workspace-view.chat-mode{grid-template-columns:minmax(0,1fr)}.workspace-view.chat-mode .conversation{width:min(100%,1050px);margin-inline:auto}.conversation-type{font-size:12px;color:var(--muted)}
+.dataset-review{display:grid;gap:12px;min-width:0;padding:18px;border:1px solid var(--line);border-radius:12px}
+.dataset-review #dataset-preview{white-space:pre-wrap;overflow-wrap:anywhere}
+.dataset-comparison{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+.dataset-comparison>div{min-width:0}.dataset-comparison pre{max-height:300px;white-space:pre-wrap;overflow-wrap:anywhere}
+.dataset-confirm{display:flex!important;align-items:flex-start;gap:10px}.dataset-confirm input{width:auto!important;margin-top:4px}
+.dataset-review [hidden]{display:none!important}
+@media(max-width:1000px){.dataset-comparison{grid-template-columns:1fr}}

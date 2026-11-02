@@ -1,4 +1,11 @@
-Forge 0.2.6 adds a separate normal Chat experience and fixes model loading and conversation controls. It also fixes clean-run setup and navigation synchronization in the release GUI checks.
+Forge 0.2.7 adds reviewed chat-data preparation and reply-only LoRA training.
+
+- **Choose whose replies to learn:** named chats ask for a participant instead of assigning roles by speaking order. Common WhatsApp Android/iOS TXT and Instagram message JSON exports are supported, including multiline messages and Unicode names. Group context retains the other participants' names.
+- **Original versus prepared samples:** compare source messages with normalized training examples and confirm the preview. Changing the participant or source invalidates confirmation; training verifies that the reviewed files have not changed.
+- **Reply-only learning:** other people's messages and earlier conversation turns provide context. Only the chosen person's final reply in each named-chat example contributes training loss. Existing canonical chats learn assistant replies only; plain documents retain text training. The selected model's chat tokenizer determines token boundaries, with explicit rejection of unsupported templates.
+- **Import transparency:** skipped media/notices, opening replies without context and unanswered final turns are reported. Base model weights remain unchanged; named LoRA storage, conversion, stacking and removal continue to work.
+
+Also included from previous releases:
 
 - **Chat and Workspace tabs:** independent histories and prompts. Chat handles normal conversation; Workspace retains project files, agent tools and approvals. Existing sessions remain in Workspace.
 - **Per-chat system prompts:** edit instructions beside the composer or inherit the app default. Prompts persist with that chat and survive export/import.

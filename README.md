@@ -54,7 +54,7 @@ The sandboxed renderer has no Node access. A separate utility process owns the b
 
 ## Training and reusable LoRAs
 
-See [TRAINING.md](TRAINING.md) for formats, preprocessing, pause/resume, conversion and stacking. The Trainer imports common chat schemas and readable documents automatically, previews the detected training mode, and rejects invalid input. It trains a supported local Hugging Face **causal language model**, not a quantized GGUF directly. Dataset normalization is generic; final token formatting uses that model's tokenizer/chat template when available.
+See [TRAINING.md](TRAINING.md) for formats, preprocessing, pause/resume, conversion and stacking. The Trainer imports common chat schemas, WhatsApp TXT, Instagram message JSON and readable documents. Named chats ask whose replies to learn and show original/prepared examples for confirmation. Other participants provide context; training learns only the chosen person’s replies. Changed files require a fresh preview. It trains a supported local Hugging Face **causal language model**, not a quantized GGUF directly. Dataset normalization is generic; final token formatting uses that model's tokenizer/chat template when available.
 
 ## Loading responsiveness and performance
 

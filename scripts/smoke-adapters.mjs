@@ -3,6 +3,7 @@ import path from 'node:path';
 import assert from 'node:assert/strict';
 import { openStore } from '../src/store.mjs';
 import { Trainer,trainingPython } from '../src/trainer.mjs';
+import { prepareDataset } from '../src/datasets.mjs';
 import { AdapterLibrary } from '../src/adapters.mjs';
 import { AdapterConverter,ensureConverter,converterCommand } from '../src/converter.mjs';
 import { Runtime,sseData } from '../src/runtime.mjs';
@@ -14,7 +15,8 @@ const store=await openStore(root,path.join(output,'data'),path.join(output,'work
 const runtime=new Runtime(root); const library=new AdapterLibrary(store); const trainer=new Trainer(root,store,runtime); trainer.adapterLibrary=library; const converter=new AdapterConverter(store,library);
 const until=async predicate => { const end=Date.now()+120000; while (!predicate()) { if (Date.now()>end || trainer.job?.status==='error') throw new Error(`Adapter smoke timed out: ${trainer.job?.error}\n${trainer.logs.slice(-15).join('\n')}`); await new Promise(r => setTimeout(r,30)); } };
 try {
-  await trainer.start({ name:'Llama test',baseModel:path.join(output,'base'),dataset:path.join(output,'data.jsonl'),device:'cpu',epochs:1,maxSteps:2,maxLength:32,batchSize:1,gradientAccumulation:1,loraRank:4,saveEvery:1 }); await until(() => !trainer.child && store.state.adapters.length===1);
+  const review=await prepareDataset(path.join(output,'data.jsonl'),store.dataDir);
+  await trainer.start({ reviewId:review.reviewId,confirmedPreview:true,name:'Llama test',baseModel:path.join(output,'base'),dataset:path.join(output,'data.jsonl'),device:'cpu',epochs:1,maxSteps:2,maxLength:32,batchSize:1,gradientAccumulation:1,loraRank:4,saveEvery:1 }); await until(() => !trainer.child && store.state.adapters.length===1);
   const adapter=store.state.adapters[0]; assert.ok(adapter.folder.includes(`${path.sep}trained${path.sep}`)); await library.rename(adapter.id,'Named test LoRA'); await fs.access(path.join(adapter.folder,'adapter_model.safetensors'));
   await converter.start(adapter.id,base); await until(() => !converter.tasks.has(adapter.id)); if (!adapter.ggufPath) throw new Error(`${adapter.conversion.error}\n${adapter.conversion.logs.join('\n')}`);
   const second=await library.importGguf(adapter.ggufPath,'Second stack member',base); await library.stack([{ id:adapter.id,scale:.5 },{ id:second.id,scale:.5 }]);
