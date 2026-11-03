@@ -80,6 +80,9 @@ jobs:
         run: ${{ matrix.command }}
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - name: Verify macOS signatures and native packaged startup
+        if: matrix.platform == 'macos' && github.event_name != 'pull_request'
+        run: node scripts/smoke-macos-package.mjs ${{ matrix.arch }}
       - uses: actions/upload-artifact@v4
         with:
           name: Forge-${{ matrix.platform }}-${{ matrix.arch }}

@@ -1,6 +1,6 @@
 {
   "name": "forge-desktop",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "private": true,
   "description": "Forge: a private desktop workspace for local AI, documents and training",
   "author": {
@@ -82,6 +82,8 @@
       "runAfterFinish": false
     },
     "mac": {
+      "identity": "-",
+      "hardenedRuntime": true,
       "extendInfo": {
         "NSMicrophoneUsageDescription": "Forge records microphone audio only when you choose Record, for local speech transcription."
       },

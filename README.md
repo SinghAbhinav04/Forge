@@ -12,7 +12,9 @@ Download the package for your OS and CPU from [GitHub Releases](https://github.c
 | macOS Intel / Apple Silicon | Open the matching DMG and move Forge.app into Applications for Spotlight/Launchpad. |
 | Linux x64 / ARM64 | Install the `.deb`, or run the AppImage and use Settings → General → Register app shortcut. AppImage desktop integration varies by distribution. |
 
-Packages use the same application source and features. Models, native inference runtimes, Whisper and the optional Python training engine are configured separately on each computer. GPU drivers, available memory, model architecture and optional engines determine which operations that computer can run. The first release is unsigned; signing/notarization needs maintainer credentials. Do not disable OS security checks globally.
+Packages use the same application source and features. Models, native inference runtimes, Whisper and the optional Python training engine are configured separately on each computer. GPU drivers, available memory, model architecture and optional engines determine which operations that computer can run. Windows packages are unsigned; macOS apps use ad-hoc signing and are not notarized. Developer ID signing and notarization need maintainer credentials. Do not disable OS security checks globally.
+
+On an Apple Silicon Mac (M-series chip), choose the **mac-arm64** package. The **mac-x64** package is for Intel Macs; running it on Apple Silicon uses Rosetta and may display the macOS 28 compatibility warning. If macOS cannot verify the developer, verify the download source and use the per-app option in System Settings → Privacy & Security if you choose to proceed.
 
 Settings → General can check GitHub for the latest stable Forge release when you choose **Check for updates**. It does not download or install the update; use the release page to choose the correct package.
 

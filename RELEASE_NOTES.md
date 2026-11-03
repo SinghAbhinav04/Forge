@@ -1,4 +1,8 @@
-Forge 0.4.0 adds project knowledge, easier model discovery and more tools for working with local AI. This release delivers an initial set of the planned improvements; the remaining work is tracked in `ROADMAP.md`.
+Forge 0.4.1 fixes macOS package signing so the Apple Silicon build has a complete, verifiable app-bundle signature. The release build now verifies signatures and launches the packaged application on both native macOS build runners before publishing it.
+
+The macOS packages use ad-hoc signing, not an Apple Developer ID, and are not notarized. macOS may still ask you to approve the app. Download **macOS ARM64 for Apple Silicon**; the x64 package is for Intel Macs and uses Rosetta when run on Apple Silicon, producing the macOS 28 compatibility warning.
+
+The following features were introduced in 0.4.0. Remaining planned work is tracked in `ROADMAP.md`.
 
 ### Work with project knowledge
 
@@ -26,4 +30,4 @@ Keyword matching can miss relevant passages; this release does not include seman
 
 Semantic document retrieval, full assistant profiles, multi-file review, a sandboxed interactive terminal, richer research, expanded GPU support and further accessibility and physical-device validation remain on the roadmap. Benchmark results vary with hardware and workload; model, GPU and tool compatibility are not guaranteed.
 
-Download the package for your operating system and architecture: **macOS ARM64 for Apple Silicon**, **macOS x64 for Intel**, and the corresponding Windows or Linux package. Installers are unsigned and macOS builds are not notarized. Models and optional inference, voice and training tools are installed separately. SHA256SUMS.txt contains release checksums. See README.md, TRAINING.md and ROADMAP.md for setup, limitations and remaining work.
+Download the package for your operating system and architecture: **macOS ARM64 for Apple Silicon**, **macOS x64 for Intel**, and the corresponding Windows or Linux package. Windows installers are unsigned; macOS apps are ad-hoc signed and not notarized. Models and optional inference, voice and training tools are installed separately. SHA256SUMS.txt contains release checksums. See README.md, TRAINING.md and ROADMAP.md for setup, limitations and remaining work.
