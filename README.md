@@ -28,6 +28,8 @@ Settings → General can check GitHub for the latest stable Forge release when y
 
 Settings include the system prompt, temperature, top-P/top-K/min-P, repeat penalty, seed, context/output limits, thinking mode, template override, CPU threads, GPU layers, KV-cache placement and per-model defaults. Loading settings require a reload. One inference model and one active chat/API task are supported at a time.
 
+Execution mode, CPU threads, GPU layers and runtime build selection live in **Settings → Runtime → Advanced runtime controls**. The library shows the saved execution choice without duplicating its controls. Automatic execution is the recommended default; manual CPU/GPU/hybrid choices remain available.
+
 In Runtime settings, an optional idle timer can unload a local model to free memory. It defaults to off, resets during activity and does not unload while a request is running. Models managed by remote servers, including Ollama, are not unloaded by this timer.
 
 Before downloading, model search shows file size and a rough CPU-only fit estimate based on available RAM and the configured context size. Architecture details, projectors, adapters, GPU offload and other allocations are not known at this stage. Split files and unknown sizes show no estimate. Use **Check fit** after download for a model-specific estimate. Model cards show the last generation speed reported by the local runtime for that model and configuration after a successful response; until then, speed is unknown. Results vary with context, settings, model and concurrent work and are not a guaranteed forecast.
@@ -38,7 +40,7 @@ The model library also checks for an Ollama service on this computer and lists m
 
 **Chat** opens by default for new profiles. It has no project file panel, workspace tool calls, or project conversation history. Change its prompt in Settings → Chat. **Workspace** retains project sessions and file tools; its prompt is in Settings → Workspace agent. Existing conversations from before this separation remain in Workspace. Both tabs keep their own last selected conversation, and enabled skills plus each session's own saved notes still apply.
 
-Use **System prompt** beside the composer to save instructions for just that conversation, or choose the app default. You can create/open other chats and prepare their text, image, document and prompt drafts while a reply continues in its original chat. Drafts persist across restarts. Queue one message to send after the current reply; a queue restored after a restart or error waits for you to send it. Pending workspace write approvals remain attached to the original conversation. Hover or focus the small information buttons for explanations.
+Use **System prompt** beside the composer to save instructions for just that conversation, or choose the app default. The **+** menu groups images, documents, web search and voice; recording has a visible stop button outside the menu. The readiness message explains the next action when a model, projector or memory adjustment is needed. You can create/open other chats and prepare their text, image, document and prompt drafts while a reply continues in its original chat. Drafts persist across restarts. Queue one message to send after the current reply; a queue restored after a restart or error waits for you to send it. Pending workspace write approvals remain attached to the original conversation. Hover or focus the small information buttons for explanations.
 
 The system-prompt dialog includes starter prompt presets and lets you save your own. Choosing a preset copies its instructions into the dialog; select **Save prompt** to apply them to the current conversation. Prompt presets do not switch models, enable tools or change permissions.
 
@@ -86,7 +88,7 @@ The sandboxed renderer has no Node access. A separate utility process owns the b
 
 ## Training and reusable LoRAs
 
-See [TRAINING.md](TRAINING.md) for formats, preprocessing, pause/resume, conversion and stacking. The Trainer imports common chat schemas, WhatsApp TXT, Instagram message JSON and readable documents. Named chats ask whose replies to learn and show original/prepared examples for confirmation. Other participants provide context; training learns only the chosen person’s replies. Changed files require a fresh preview. It trains a supported local Hugging Face **causal language model**, not a quantized GGUF directly. Dataset normalization is generic; final token formatting uses that model's tokenizer/chat template when available.
+See [TRAINING.md](TRAINING.md) for formats, preprocessing, pause/resume, conversion and stacking. The Trainer imports common chat schemas, WhatsApp TXT, Instagram HTML exports and message JSON, and readable documents. Named chats ask whose replies to learn and show original/prepared examples for confirmation. Other participants provide context; training learns only the chosen person’s replies. Changed files require a fresh preview. It trains a supported local Hugging Face **causal language model**, not a quantized GGUF directly. Dataset normalization is generic; final token formatting uses that model's tokenizer/chat template when available.
 
 ## Loading responsiveness and performance
 

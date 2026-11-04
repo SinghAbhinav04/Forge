@@ -39,7 +39,11 @@ Hardware scripts use local test assets and write results to ignored `test-artifa
 2. Build the Windows installer and launch the packaged app. Check PDF extraction, settings and embedded resources from the archive.
 3. Commit only source, the lockfile, icons and documentation. Inspect ignored files; exclude `.data`, models, runtime binaries, projects, credentials and `dist`.
 4. Push main to `https://github.com/SinghAbhinav04/Forge.git`; inspect all six package jobs.
-5. Tag the matching package version (`v0.2.7`). The tag workflow publishes a GitHub release only after all platform packages pass their checks and build. Windows x64 also runs the Chat/Workspace, background composer and training-data review GUI regression checks.
+5. Tag the matching package version (`v<package-version>`). The tag workflow publishes a GitHub release only after all platform packages pass their checks and build. Windows x64 also runs the conversation, training-data, conversion, knowledge and usability GUI regressions.
 6. Check package inventory/checksums. Verify installation, search integration, tray quit, persistence and model operation on actual target systems before claiming native feature certification.
 
 Windows unsigned NSIS, macOS unsigned DMG/ZIP, and Linux AppImage/deb are configured. Signing certificates, Apple notarization, auto-update delivery, rich Word/PDF editing/export, OCR and a built-in terminal/web browser remain future work. Training is causal text LoRA; generic vision/audio training and direct GGUF training are not implemented.
+
+## Version policy before 1.0
+
+Use patch releases for fixes, performance work and smaller improvements within the current milestone. Stay on `0.4.x` for these changes; patch numbers are unrestricted (`0.4.27`, `0.4.28`, `0.4.30` and beyond are valid). Reserve `0.5.0` for a substantial feature milestone. Follow the same policy for `0.5.x` through `0.9.x` before moving to `1.0.0`. Do not increment the minor version just because several patches have shipped. Keep package.json, package-lock.json and the release tag in agreement.

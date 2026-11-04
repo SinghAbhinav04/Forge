@@ -54,6 +54,61 @@ test('Instagram export timestamps restore chronology and chosen speaker can be f
   await fs.writeFile(result.path,'{}\n'); await assert.rejects(()=>reviewedDataset(result.reviewId,file,dir),/changed after preview/);
 });
 
+test('Instagram HTML and ZIP imports merge numbered pages and keep group reply targets isolated',async t=>{
+  const dir=await root(t);
+  const card=(sender,clock,content,extra='')=>`<div class="_a6-g"><h2 class="_a6-i">${sender}</h2><div class="_a6-p"><div><div></div><div>${content}</div><div>${extra}</div><div></div></div></div><div class="_a6-o">Nov 3, 2026 ${clock}</div></div>`;
+  const html=(...cards)=>`<!doctype html><main>${cards.join('')}</main>`;
+  const page1='<title>Weekend &amp; plans</title>'+html(card('Alice','8:03 pm','Yes &amp; thanks<br>See you soon.','<ul><li>Reaction metadata</li></ul>'),card('Carol','8:02 pm','We are ready.'),card('Bob','8:01 pm','','<img src="photo.jpg"><a href="media">Attachment caption</a>'));
+  const page2=html(card('Bob','8:00 pm','Are you free?'));
+  const folder=path.join(dir,'group'); await fs.mkdir(folder);
+  await fs.writeFile(path.join(folder,'message_1.html'),page1);
+  await fs.writeFile(path.join(folder,'message_2.html'),page2);
+  const standalone=await prepareDataset(path.join(folder,'message_1.html'),dir);
+  assert.equal(standalone.needsSelection,true);
+  const source=path.join(dir,'export.zip');
+  const group='your_instagram_activity/messages/inbox/group_123';
+  const dm='your_instagram_activity/messages/inbox/dm_456';
+  const zip=new JSZip();
+  zip.file(`${group}/message_1.html`,page1);
+  zip.file(`${group}/message_2.html`,page2);
+  zip.file(`${dm}/message_1.html`,html(card('Bob','8:05 pm','Private DM content'),card('Alice','8:04 pm','Earlier DM content')));
+  zip.file(`${group}/photos/photo.jpg`,'ignored');
+  await fs.writeFile(source,await zip.generateAsync({type:'nodebuffer'}));
+  const list=await prepareDataset(source,dir);
+  assert.equal(list.needsThread,true);
+  assert.deepEqual(list.threads.map(({id,pages})=>[id,pages]),[[dm,1],[group,2]]);
+  assert.equal(list.threads[1].title,'Weekend & plans');
+  assert.deepEqual(list.threads[1].recentSenders,['Alice','Carol','Bob']);
+  await assert.rejects(()=>prepareDataset(source,dir,{threadId:'missing'}),/selected Instagram thread is missing/);
+  const detected=await prepareDataset(source,dir,{threadId:group});
+  assert.equal(detected.needsSelection,true);
+  assert.deepEqual(detected.participants.map(person=>person.name),['Bob','Carol','Alice']);
+  const prepared=await prepareDataset(source,dir,{threadId:group,selectedSpeaker:'Alice'});
+  assert.equal(prepared.examples,1);
+  assert.deepEqual(prepared.preview[0],{
+    messages:[{role:'user',content:'Bob: Are you free?\n\nCarol: We are ready.'},{role:'assistant',content:'Yes & thanks\nSee you soon.'}],
+    assistant_only:true,target_last_reply:true
+  });
+  assert.match(prepared.samples[0].original,/8:00 pm · Bob/);
+  assert.doesNotMatch(JSON.stringify(prepared),/Reaction metadata|Attachment caption|Private DM content/);
+  const filtered=await prepareDataset(source,dir,{threadId:group,selectedSpeaker:'Alice',contextSpeakers:['Carol']});
+  assert.deepEqual(filtered.contextSpeakers,['Carol']);
+  assert.deepEqual(filtered.preview[0].messages.map(message=>message.content),['Carol: We are ready.','Yes & thanks\nSee you soon.']);
+  assert.match(filtered.warnings.join(' '),/Excluded 1 messages/);
+  await assert.rejects(()=>prepareDataset(source,dir,{threadId:group,selectedSpeaker:'Alice',contextSpeakers:['Bob']}),/no replies from this AI participant/i);
+  await assert.rejects(()=>prepareDataset(source,dir,{threadId:group,selectedSpeaker:'Alice',contextSpeakers:['Alice']}),/choose at least one other participant/i);
+  assert.equal((await reviewedDataset(prepared.reviewId,source,dir)).path,prepared.path);
+  const fromFolder=await prepareDataset(folder,dir,{selectedSpeaker:'Alice'});
+  assert.deepEqual(fromFolder.preview,prepared.preview);
+  await fs.appendFile(path.join(folder,'message_2.html'),'<!-- updated -->');
+  await assert.rejects(()=>reviewedDataset(fromFolder.reviewId,folder,dir),/changed after preview/);
+  zip.file(`${group}/message_2.html`,page2+'<!-- updated -->');
+  await fs.writeFile(source,await zip.generateAsync({type:'nodebuffer'}));
+  await assert.rejects(()=>reviewedDataset(prepared.reviewId,source,dir),/changed after preview/);
+  const bad=path.join(dir,'ordinary.html'); await fs.writeFile(bad,'<html><p>Not a chat</p></html>');
+  await assert.rejects(()=>prepareDataset(bad,dir),/Unrecognized Instagram message HTML/);
+});
+
 test('iOS exports, grouped senders, JSONL names, and plain text have explicit training modes',async t=>{
   const dir=await root(t); const file=path.join(dir,'ios.txt'); await fs.writeFile(file,'[01/11/2026, 20:00:01] Alice: Hi\n[01/11/2026, 20:00:02] Bob: Hey\n[01/11/2026, 20:00:03] Carol: Everyone ready?\n[01/11/2026, 20:00:04] Alice: Yes');
   const result=await prepareDataset(file,dir,{selectedSpeaker:'Alice'}); assert.equal(result.participants.length,3); assert.ok(result.preview[0].messages[0].content.includes('Bob: Hey')); assert.ok(result.preview[0].messages[0].content.includes('Carol: Everyone ready?'));

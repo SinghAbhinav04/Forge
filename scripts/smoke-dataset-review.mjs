@@ -1,10 +1,25 @@
 import { _electron as electron } from 'playwright';
 import fs from 'node:fs/promises'; import path from 'node:path'; import assert from 'node:assert/strict';
+import JSZip from 'jszip';
 const output=path.resolve('test-artifacts'); await fs.mkdir(output,{recursive:true}); const root=await fs.mkdtemp(path.join(output,'dataset-review-')); const env={...process.env,LOCAL_DESK_TEST_ROOT:root}; delete env.ELECTRON_RUN_AS_NODE;
 const file=path.join(root,'whatsapp.txt'); await fs.writeFile(file,'01/11/2026, 8:01 pm - Abhinav: Opening\n01/11/2026, 8:02 pm - Rahul: Free tonight?\n01/11/2026, 8:03 pm - Abhinav: After eight.\n01/11/2026, 8:04 pm - Rahul: Great!');
-let app; const errors=[];
+const exportPath=path.join(root,'instagram.zip');
+const zip=new JSZip();
+const card=(name,text,minute)=>`<div class="_a6-g"><h2 class="_a6-i">${name}</h2><div class="_a6-p"><div><div></div><div>${text}</div><div></div><div></div></div></div><div class="_a6-o">Nov 3, 2026 8:${minute} pm</div></div>`;
+const inbox='your_instagram_activity/messages/inbox';
+zip.file(`${inbox}/group_123/message_1.html`,`<title>Weekend plans</title><main>${card('Alice','See you soon.','03')}${card('Carol','We are ready.','02')}${card('Bob','Can you join?','01')}</main>`);
+zip.file(`${inbox}/dm_456/message_1.html`,`<main>${card('Alice','Unrelated reply.','02')}${card('Bob','Private DM.','01')}</main>`);
+await fs.writeFile(exportPath,await zip.generateAsync({type:'nodebuffer'}));
+let app; let page; const errors=[];
 try {
- app=await electron.launch({args:['.'],env,timeout:60000}); const page=await app.firstWindow(); page.on('pageerror',e=>errors.push(e.message)); await page.locator('.tools-nav > summary').click(); await page.locator('[data-view=trainer]').click();
+ app=await electron.launch({args:['.'],env,timeout:60000}); page=await app.firstWindow(); page.on('pageerror',e=>errors.push(e.message));
+ const base=path.join(root,'Small-Instruct');
+ await page.route('**/api/trainer/bases',route=>route.fulfill({json:[{path:base,name:'Small-Instruct',bytes:268435456}]}));
+ await page.locator('.tools-nav > summary').click(); await page.locator('[data-view=trainer]').click();
+ await page.waitForFunction(value=>document.getElementById('train-base').value===value,base);
+ await page.locator('#trainer-open-models').click();
+ await page.locator('#models-view').waitFor();
+ await page.locator('[data-view=trainer]').click();
  await page.locator('#train-dataset').fill(file); assert.equal(await page.locator('#training-start').isDisabled(),true); await page.locator('#dataset-detect').click(); await page.locator('#dataset-speaker').waitFor(); assert.equal(await page.locator('#dataset-speaker').inputValue(),'');
  await page.locator('#dataset-speaker').selectOption('Abhinav'); await page.locator('#dataset-confirm').waitFor(); assert.equal(await page.locator('#training-start').isDisabled(),true);
  const sample=await page.locator('#dataset-samples').textContent(); assert.ok(sample.includes('8:02 pm')); assert.ok(sample.includes('Free tonight?')); assert.ok(sample.includes('After eight.')); assert.ok(sample.includes('target_last_reply')); await page.locator('#dataset-confirm').check(); assert.equal(await page.locator('#training-start').isEnabled(),true);
@@ -12,5 +27,45 @@ try {
  await page.locator('#dataset-speaker').selectOption('Rahul'); await page.waitForFunction(()=>document.getElementById('dataset-preview').textContent.includes('(Rahul)')); assert.equal(await page.locator('#dataset-confirm').isChecked(),false); assert.equal(await page.locator('#training-start').isDisabled(),true);
  await page.locator('#train-dataset').fill(file+'-missing'); assert.equal(await page.locator('#dataset-confirm').isVisible(),false); assert.equal(await page.locator('#training-start').isDisabled(),true);
  const blocked=await page.evaluate(async file=>{ const r=await fetch('/api/trainer/start',{method:'POST',headers:{'Content-Type':'application/json','X-Local-Desk-Token':sessionStorage.getItem('local-desk-token')},body:JSON.stringify({dataset:file})});return {status:r.status,body:await r.json()}; },file); assert.ok(blocked.status>=400); assert.match(blocked.body.error,/confirm/);
- assert.deepEqual(errors,[]); console.log('Dataset review passed: explicit participant selection, original/prepared comparison, confirmation gate, speaker/source invalidation, and backend review enforcement.');
+ await page.locator('#train-dataset').fill(exportPath);
+ await page.locator('#dataset-detect').click();
+ await page.locator('#dataset-thread option').filter({hasText:/Weekend plans.*Carol.*group_123/}).waitFor({state:'attached'});
+ await page.locator('#dataset-thread').selectOption(`${inbox}/group_123`);
+ await page.locator('#dataset-speaker').selectOption('Alice');
+ await page.locator('#dataset-confirm').check();
+ const groupSample=await page.locator('#dataset-samples').textContent();
+ assert.match(groupSample,/Carol: We are ready\./);
+ assert.match(groupSample,/See you soon\./);
+ assert.doesNotMatch(groupSample,/Private DM/);
+ await page.locator('#dataset-context').getByLabel('Bob').press('Space');
+ await page.locator('#dataset-confirm').waitFor();
+ assert.equal(await page.locator('#dataset-confirm').isChecked(),false);
+ assert.doesNotMatch(await page.locator('#dataset-samples').textContent(),/Can you join/);
+ await page.locator('#dataset-thread').selectOption(`${inbox}/dm_456`);
+ assert.equal(await page.locator('#training-start').isDisabled(),true);
+ await page.locator('#dataset-speaker').selectOption('Alice');
+ await page.locator('#dataset-confirm').waitFor();
+ assert.equal(await page.locator('#dataset-confirm').isChecked(),false);
+ assert.match(await page.locator('#dataset-samples').textContent(),/Private DM/);
+ assert.match(await page.locator('#dataset-context').textContent(),/Bob/);
+ await page.locator('#dataset-thread').selectOption(`${inbox}/group_123`);
+ await page.locator('#dataset-confirm').waitFor();
+ assert.equal(await page.locator('#dataset-speaker').inputValue(),'Alice');
+ assert.equal(await page.locator('#dataset-context').getByLabel('Bob').isChecked(),false);
+ if (['win32','linux'].includes(process.platform) && process.arch==='x64') {
+  let installBody;
+  await page.route('**/api/trainer/install',route=>{
+   installBody=route.request().postDataJSON();
+   return route.fulfill({json:{job:{id:'setup-test',status:'installing',engine:'cuda'},canInstallCuda:true,logs:['Downloading CUDA PyTorch…']}});
+  });
+  const install=page.locator('#training-install-cuda');
+  await install.click({timeout:10000});
+  await page.getByText('Installing NVIDIA CUDA training engine…',{exact:true}).waitFor();
+  assert.deepEqual(installBody,{device:'cuda'});
+ }
+ assert.deepEqual(errors,[]); console.log('Dataset review passed: model selection, WhatsApp and Instagram ZIP previews, thread/speaker selection, and confirmation enforcement.');
+} catch (error) {
+ const detail=await page?.locator('#dataset-preview').textContent({timeout:2000}).catch(()=>null);
+ if (detail) console.error('Training preview:',detail);
+ throw error;
 } finally { if(app)await app.close(); }

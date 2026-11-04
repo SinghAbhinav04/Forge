@@ -1,3 +1,14 @@
+# Forge 0.4.1 local validation
+
+- JavaScript syntax checks pass. Backend suite: 92 checks, 91 passed and one skipped for Windows symlink privileges.
+- `npm run test:usability` verifies delayed file opens across projects and within a project, edits during pending opens and saves, keyboard menu navigation, single runtime controls, incremental response nodes and final Markdown, plus guided LoRA conversion/loading/activation and cancellation. LoRA conversion and runtime operations in this UI regression use fixtures; it does not measure real-model quality.
+- Conversation streaming/isolation, queued messages, document attachments, durable drafts, project knowledge (text/PDF), model conversion controls and training-data review desktop regressions pass with isolated profiles.
+- The knowledge cache regression confirms unchanged indexes are parsed once across repeated list/search requests, external index changes invalidate the cache, and changed source files are still excluded.
+- The local Windows installer builds successfully. Packaged native launch, resources, PDF/Word extraction, settings/background close, the package-version label, and knowledge-worker indexing/retrieval from app.asar pass. Composer-menu and simplified-runtime screenshots were visually checked.
+- The release workflow includes the new usability regression. No macOS/Linux physical-device or new GPU/training-quality claim is made for this local update.
+
+Previous validation records:
+
 # Forge 0.2.7 training-data checks
 
 41 backend checks pass, including WhatsApp Android/iOS imports, Unicode/group speakers, Instagram chronological ordering, target selection, original/prepared previews and changed-file rejection. The desktop review regression passes with a separate test profile: explicit selection, comparison samples, confirmation, and source/speaker invalidation. Four real-tokenizer checks verify reply-only labels, context masking, padding, truncation and unsupported-template rejection. Tiny-model LoRA training verifies actual updates and checkpoint controls; this does not establish personalization quality on a real chat corpus. No physical macOS training test was performed.

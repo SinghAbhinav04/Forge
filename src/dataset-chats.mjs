@@ -49,7 +49,7 @@ export function jsonChats(document) {
   return { conversations,named,format:instagram ? 'Instagram / named JSON chat' : 'JSON conversation',skipped:0 };
 }
 
-export function prepareChats(chat,selectedSpeaker) {
+export function prepareChats(chat,selectedSpeaker,contextSpeakers) {
   let skipped=chat.skipped; const speakers=new Map();
   const conversations=chat.conversations.map(records => records.filter(record => {
     if (!record.content.trim() || omitted(record.content)) { skipped++; return false; }
@@ -61,8 +61,26 @@ export function prepareChats(chat,selectedSpeaker) {
   const base={ mode:chat.format,participants,requiresSpeaker:true,skipped,warnings:skipped ? [`Skipped ${skipped} platform notices or empty/media-only messages. Attachments are not trained.`] : [] };
   if (!selectedSpeaker) return { ...base,needsSelection:true,rows:[],samples:[] };
   if (!speakers.has(selectedSpeaker)) throw new Error('Choose one of the detected participants.');
-  const rows=[]; const samples=[]; let opening=0; let trailing=0;
+  const otherSpeakers=[...speakers.keys()].filter(name=>name!==selectedSpeaker);
+  const incoming=contextSpeakers ?? otherSpeakers;
+  if (!Array.isArray(incoming) || !incoming.length || incoming.some(name=>!otherSpeakers.includes(name))) throw new Error('Choose at least one other participant for user context.');
+  const context=new Set(incoming);
+  let excluded=0;
+  const segments=[];
   for (const records of conversations) {
+    let segment=[];
+    for (const record of records) {
+      if (record.speaker===selectedSpeaker || context.has(record.speaker)) segment.push(record);
+      else {
+        excluded++;
+        if (segment.length) segments.push(segment);
+        segment=[];
+      }
+    }
+    if (segment.length) segments.push(segment);
+  }
+  const rows=[]; const samples=[]; let opening=0; let trailing=0;
+  for (const records of segments) {
     const turns=[];
     for (const record of records) {
       const role=record.speaker===selectedSpeaker ? 'assistant' : 'user';
@@ -81,9 +99,10 @@ export function prepareChats(chat,selectedSpeaker) {
       if (samples.length<3) samples.push({ original:included.flatMap(m=>m.original).join('\n'),prepared:row });
     }
   }
-  if (!rows.length) throw new Error('No replies from this participant have preceding incoming text. Choose another participant or preprocess the chat.');
+  if (!rows.length) throw new Error('No replies from this AI participant have preceding user context. Try different participant roles.');
+  if (excluded) base.warnings.push(`Excluded ${excluded} messages from unselected participants. Examples never join messages across those gaps.`);
   if (opening) base.warnings.push(`Skipped ${opening} opening reply blocks without incoming context.`);
   if (trailing) base.warnings.push(`Excluded ${trailing} unanswered final incoming blocks from training targets.`);
   base.warnings.push('Nearby turns provide context. Only the final selected-person reply in each example is a training target; older context is limited to 12 turns / approximately 6,000 characters.');
-  return { ...base,needsSelection:false,selectedSpeaker,rows,samples,lossMode:'selected replies only' };
+  return { ...base,needsSelection:false,selectedSpeaker,contextSpeakers:[...context],rows,samples,lossMode:'selected replies only' };
 }

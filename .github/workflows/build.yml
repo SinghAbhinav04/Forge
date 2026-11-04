@@ -72,6 +72,9 @@ jobs:
       - name: Check model benchmark interface
         if: matrix.platform == 'windows' && matrix.arch == 'x64'
         run: npm run test:benchmark
+      - name: Check file navigation, simple controls and guided LoRA setup
+        if: matrix.platform == 'windows' && matrix.arch == 'x64'
+        run: npm run test:usability
       - name: Check release tag matches package version
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash

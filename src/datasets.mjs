@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID,createHash } from 'node:crypto';
 import { textChat,jsonChats,prepareChats } from './dataset-chats.mjs';
+import { readInstagramSource } from './dataset-instagram.mjs';
 import mammoth from 'mammoth';
 import WordExtractor from 'word-extractor';
 import { parse as csv } from 'csv-parse/sync';
@@ -99,16 +100,26 @@ const digest=bytes => createHash('sha256').update(bytes).digest('hex');
 export async function prepareDataset(file,dataDir,options={}) {
   if (typeof file!=='string' || !path.isAbsolute(file)) throw new Error('Choose an absolute local dataset/document path.');
   const extension=path.extname(file).toLowerCase();
-  const info=await fs.stat(file); if (!info.isFile() || info.size>32*1024**2) throw new Error('Choose a document smaller than 32 MiB.');
-  const sourceHash=digest(await fs.readFile(file)); const text=await extractDocument(file); let rows; let mode; let warnings=[]; let review={}; let chat;
+  const info=await fs.stat(file);
+  const instagramSource=info.isDirectory() || ['.html','.zip'].includes(extension);
+  if (!info.isDirectory() && !info.isFile()) throw new Error('Choose a regular file or Instagram chat folder.');
+  if (!instagramSource && info.size>32*1024**2) throw new Error('Choose a document smaller than 32 MiB.');
+  const instagram=instagramSource ? await readInstagramSource(file,info,options.threadId) : null;
+  if (instagram?.threads) return {source:file,threads:instagram.threads,needsThread:true};
+  const sourceHash=instagram?.sourceHash ?? digest(await fs.readFile(file));
+  const text=instagram?.text ?? await extractDocument(file);
+  const sourceDetails=instagram?.threadId ? {threadId:instagram.threadId} : {};
+  let rows; let mode; let warnings=[]; let review={}; let chat;
   try {
     let document;
-    if (extension==='.json') { document=JSON.parse(text); mode='structured JSON'; }
+    if (instagram) { chat=instagram.chat; }
+    else if (extension==='.json') { document=JSON.parse(text); mode='structured JSON'; }
     else if (extension==='.jsonl') { document=text.split(/\r?\n/).filter(l => l.trim()).map((line,i) => { try { return JSON.parse(line); } catch { throw new Error(`Invalid JSON on line ${i+1}.`); } }); mode='JSONL'; }
     else if (['.csv','.tsv'].includes(extension)) { document=csv(text,{ columns:headers => headers.map(h => h.trim().toLowerCase()),delimiter:extension==='.tsv' ? '\t' : ',',skip_empty_lines:true,bom:true }); mode='tabular records'; }
-    chat=document ? jsonChats(document) : textChat(text);
-    review=chat ? prepareChats(chat,options.selectedSpeaker) : null;
-    if (review?.needsSelection) return { ...review,source:file,originalSample:text.slice(0,5000),examples:0,preview:[] };
+    chat ??= document ? jsonChats(document) : textChat(text);
+    review=chat ? prepareChats(chat,options.selectedSpeaker,options.contextSpeakers) : null;
+    if (instagram && !review.participants.length) throw new Error('This Instagram chat has no usable text messages.');
+    if (review?.needsSelection) return { ...review,...sourceDetails,source:file,originalSample:text.slice(0,5000),examples:0,preview:[] };
     if (review) ({ rows,mode,warnings }=review);
     else if (document) rows=normalizeJson(document);
     else ({rows,mode,warnings}=normalizeText(text));
@@ -116,17 +127,26 @@ export async function prepareDataset(file,dataDir,options={}) {
   if (!rows?.length) throw new Error('No usable training examples. Please preprocess the source.');
   // Prepared chat rows always mask incoming turns. Documents deliberately use text loss.
   rows=rows.map(row=>row.messages ? {...row,assistant_only:true} : row);
-  if (digest(await fs.readFile(file))!==sourceHash) throw new Error('Source changed during import. Preview the file again.');
+  if (!instagram && digest(await fs.readFile(file))!==sourceHash) throw new Error('Source changed during import. Preview the file again.');
   const directory=path.join(dataDir,'datasets'); await fs.mkdir(directory,{ recursive:true }); const reviewId=randomUUID(); const output=path.join(directory,`${reviewId}.jsonl`); const prepared=rows.map(r=>JSON.stringify(r)).join('\n')+'\n'; await fs.writeFile(output,prepared);
   const result={ path:output,reviewId,source:file,mode,examples:rows.length,warnings,preview:rows.slice(0,3),originalSample:text.slice(0,5000),samples:review?.samples || [],participants:review?.participants || [],selectedSpeaker:review?.selectedSpeaker || null,requiresSpeaker:!!review?.requiresSpeaker,needsSelection:false,lossMode:review?.lossMode || (rows.some(r=>r.messages) ? 'assistant replies only' : 'all document text'),bytes:Buffer.byteLength(text),messages:rows.reduce((n,r)=>n+(r.messages?.length || 0),0) };
-  await fs.writeFile(path.join(directory,`${reviewId}.review.json`),JSON.stringify({ source:file,sourceHash,preparedHash:digest(prepared),mode,examples:rows.length,selectedSpeaker:result.selectedSpeaker,lossMode:result.lossMode }));
-  return result;
+  const contextSpeakers=review?.contextSpeakers ?? [];
+  await fs.writeFile(path.join(directory,`${reviewId}.review.json`),JSON.stringify({ source:file,...sourceDetails,instagram:!!instagram,sourceHash,preparedHash:digest(prepared),mode,examples:rows.length,selectedSpeaker:result.selectedSpeaker,contextSpeakers,lossMode:result.lossMode }));
+  return {...result,...sourceDetails,contextSpeakers,bytes:instagram?.bytes ?? result.bytes};
 }
 
 export async function reviewedDataset(reviewId,source,dataDir) {
   if (typeof reviewId!=='string' || !/^[a-f0-9-]{36}$/.test(reviewId)) throw new Error('Preview the training source and confirm the prepared examples before starting.');
   const directory=path.join(dataDir,'datasets'); const output=path.join(directory,`${reviewId}.jsonl`);
   let review; try { review=JSON.parse(await fs.readFile(path.join(directory,`${reviewId}.review.json`),'utf8')); } catch { throw new Error('Training preview is missing. Preview and confirm the source again.'); }
-  if (review.source!==source || digest(await fs.readFile(source))!==review.sourceHash || digest(await fs.readFile(output))!==review.preparedHash) throw new Error('Training source or prepared data changed after preview. Preview and confirm it again.');
+  const changed=()=>new Error('Training source or prepared data changed after preview. Preview and confirm it again.');
+  if (review.source!==source) throw changed();
+  let sourceHash;
+  try {
+    sourceHash=review.instagram
+      ? (await readInstagramSource(source,await fs.stat(source),review.threadId,false)).sourceHash
+      : digest(await fs.readFile(source));
+  } catch { throw changed(); }
+  if (sourceHash!==review.sourceHash || digest(await fs.readFile(output))!==review.preparedHash) throw changed();
   return { ...review,path:output };
 }

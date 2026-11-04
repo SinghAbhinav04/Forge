@@ -1,6 +1,23 @@
-Forge 0.4.1 fixes macOS package signing so the Apple Silicon build has a complete, verifiable app-bundle signature. The release build now verifies signatures and launches the packaged application on both native macOS build runners before publishing it.
+Forge 0.4.6 adds Instagram training-data import, CUDA training setup, and desktop workflow improvements.
 
-The macOS packages use ad-hoc signing, not an Apple Developer ID, and are not notarized. macOS may still ask you to approve the app. Download **macOS ARM64 for Apple Silicon**; the x64 package is for Intel Macs and uses Rosetta when run on Apple Silicon, producing the macOS 28 compatibility warning.
+### Training
+
+- Import Instagram HTML exports from ZIP archives, individual pages, or chat folders. Select a thread and assign the assistant and context speakers. Review the original messages beside the prepared examples before training.
+- Choose from detected local Hugging Face training bases. Forge fills in the folder automatically when it finds a single match and links to the GGUF model library for chat.
+- Install the NVIDIA CUDA training engine on x64 Windows or Linux. Forge verifies a GPU operation before using it and keeps the CPU environment available.
+- Training engine setup, checkpoints, and adapter saves handle Windows profiles redirected to a different drive.
+- **Use this LoRA** guides base confirmation, conversion, loading, and activation, with an option to cancel setup.
+
+### Chat and workspace
+
+- File navigation ignores delayed responses from an earlier selection and preserves edits made during opens and saves. Line-range reads report clipped text.
+- Project knowledge uses a bounded cache with saved-file revision checks. Chat streams update existing text and render Markdown on completion.
+- The composer’s keyboard-accessible **+** menu groups images, documents, web search, and voice. A recording keeps a visible stop button.
+- Manual inference controls are grouped in **Advanced runtime controls**. Readiness messages point to the relevant model, vision, or memory controls.
+
+### macOS packages
+
+Forge retains the ad-hoc signing and native startup checks introduced in 0.4.1. Choose **macOS ARM64 for Apple Silicon** or **macOS x64 for Intel**. macOS packages are ad-hoc signed and require per-app approval when Gatekeeper prompts.
 
 The following features were introduced in 0.4.0. Remaining planned work is tracked in `ROADMAP.md`.
 

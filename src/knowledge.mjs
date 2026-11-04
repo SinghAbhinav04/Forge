@@ -31,12 +31,21 @@ export function splitKnowledge(text) {
 }
 
 export class KnowledgeStore {
-  constructor(dataDir){this.dataDir=path.resolve(dataDir);this.directory=path.join(this.dataDir,'knowledge');this.jobs=new Map();this.mutating=new Set();}
+  constructor(dataDir){this.dataDir=path.resolve(dataDir);this.directory=path.join(this.dataDir,'knowledge');this.jobs=new Map();this.mutating=new Set();this.cache=new Map();this.cachedCharacters=0;}
   async isAppData(file){let data;try{data=await fs.realpath(this.dataDir);}catch(error){if(error.code!=='ENOENT')throw error;data=this.dataDir;}const relative=path.relative(data,file);return !relative || (!relative.startsWith('..'+path.sep) && relative!=='..' && !path.isAbsolute(relative));}
   file(id){if(!validId.test(id || ''))throw new Error('Invalid project ID.');return path.join(this.directory,`${id}.json`);}
   jobFile(id){this.file(id);return path.join(this.directory,`${id}.job.json`);}
-  async read(id){try{const value=await readJson(this.file(id));if(value.version!==1 || !Array.isArray(value.documents))throw new Error('Invalid knowledge index.');return value;}catch(error){if(error.code==='ENOENT')return {version:1,documents:[]};throw error;}}
-  async save(id,value){await fs.mkdir(this.directory,{recursive:true});await atomicJson(this.file(id),JSON.stringify(value));}
+  forget(id){const old=this.cache.get(id);if(old)this.cachedCharacters-=old.characters;this.cache.delete(id);}
+  remember(id,value,signature,characters){this.forget(id);if(characters>64_000_000)return;this.cache.set(id,{value,signature,characters});this.cachedCharacters+=characters;while(this.cache.size>4 || this.cachedCharacters>64_000_000)this.forget(this.cache.keys().next().value);}
+  async read(id){
+    const file=this.file(id);let signature;
+    try{signature=revision(await fs.stat(file));}catch(error){if(error.code!=='ENOENT')throw error;}
+    const cached=this.cache.get(id);if(cached && signature===cached.signature){this.cache.delete(id);this.cache.set(id,cached);return cached.value;}
+    this.forget(id);
+    try{const value=await readJson(file);if(value.version!==1 || !Array.isArray(value.documents))throw new Error('Invalid knowledge index.');const current=revision(await fs.stat(file));if(!signature || signature===current)this.remember(id,value,current,JSON.stringify(value).length);return value;}
+    catch(error){if(error.code==='ENOENT')return {version:1,documents:[]};throw error;}
+  }
+  async save(id,value){await fs.mkdir(this.directory,{recursive:true});const text=JSON.stringify(value);await atomicJson(this.file(id),text);this.remember(id,value,revision(await fs.stat(this.file(id))),text.length);}
   async saveJob(id){await fs.mkdir(this.directory,{recursive:true});await atomicJson(this.jobFile(id),JSON.stringify(this.snapshot(id)));}
   async runJob(id,job,operation){try{await operation();}catch(error){if(job.status!=='cancelled'){job.status='error';job.error=error.message;}}finally{try{await this.saveJob(id);}catch(error){if(job.status!=='cancelled'){job.status='error';job.error=`Could not save indexing status: ${error.message}`;}}job.done=true;}}
   snapshot(id){const job=this.jobs.get(id);return job ? {id:job.id,status:job.status,path:job.path,error:job.error || null,...(job.total!==undefined ? {total:job.total,processed:job.processed,failed:job.failed,limited:job.limited,errors:job.errors} : {})} : null;}
@@ -58,8 +67,8 @@ export class KnowledgeStore {
       if(job.status==='cancelled')return;
       const target=await confined(workspace.path,relative);const current=await fs.stat(target);if(revision(current)!==initialRevision)throw new Error('The file changed during indexing. Index it again.');
       if(typeof text!=='string' || !text.trim())throw new Error('No readable text found. Scanned documents may need OCR.');
-      const index=await this.read(workspace.id);const truncated=text.length>maxText;const chunks=splitKnowledge(text.slice(0,maxText));const doc={path:relative,revision:initialRevision,indexedAt:Date.now(),bytes:current.size,truncated,extracted:!['.txt','.md','.json','.jsonl','.csv','.tsv'].includes(path.extname(relative).toLowerCase()),chunks};
-      index.documents=index.documents.filter(item=>item.path!==relative);if(index.documents.length>=maxFiles)throw new Error('A project can index at most 50 files.');index.documents.push(doc);if(job.status==='cancelled')return;job.status='saving';await this.save(workspace.id,index);job.status=batch?'running':'completed';
+      const previous=await this.read(workspace.id);const truncated=text.length>maxText;const chunks=splitKnowledge(text.slice(0,maxText));const doc={path:relative,revision:initialRevision,indexedAt:Date.now(),bytes:current.size,truncated,extracted:!['.txt','.md','.json','.jsonl','.csv','.tsv'].includes(path.extname(relative).toLowerCase()),chunks};
+      const index={...previous,documents:previous.documents.filter(item=>item.path!==relative)};if(index.documents.length>=maxFiles)throw new Error('A project can index at most 50 files.');index.documents.push(doc);if(job.status==='cancelled')return;job.status='saving';await this.save(workspace.id,index);job.status=batch?'running':'completed';
     }catch(error){if(job.status!=='cancelled'){job.status='error';job.error=error.message;}}
   }
   async startFolder(workspace,relative='.'){
@@ -74,7 +83,7 @@ export class KnowledgeStore {
     if(job.status!=='cancelled')job.status='completed';
   }
   async cancel(id){const job=this.jobs.get(id);if(!job || job.status!=='running')throw new Error('No indexing job is running.');job.status='cancelled';job.controller.abort(new Error('Indexing cancelled.'));await job.task;return this.snapshot(id);}
-  async remove(workspace,relative){if(this.mutating.has(workspace.id) || this.jobs.has(workspace.id) && !this.jobs.get(workspace.id).done)throw new Error('Wait for indexing to finish.');this.mutating.add(workspace.id);try{const index=await this.read(workspace.id);if(!index.documents.some(item=>item.path===relative))throw new Error('Indexed document not found.');index.documents=index.documents.filter(item=>item.path!==relative);await this.save(workspace.id,index);return this.list(workspace);}finally{this.mutating.delete(workspace.id);}}
+  async remove(workspace,relative){if(this.mutating.has(workspace.id) || this.jobs.has(workspace.id) && !this.jobs.get(workspace.id).done)throw new Error('Wait for indexing to finish.');this.mutating.add(workspace.id);try{const index=await this.read(workspace.id);if(!index.documents.some(item=>item.path===relative))throw new Error('Indexed document not found.');await this.save(workspace.id,{...index,documents:index.documents.filter(item=>item.path!==relative)});return this.list(workspace);}finally{this.mutating.delete(workspace.id);}}
   async search(workspace,query){
     if(typeof query!=='string' || query.length>100000)throw new Error('Enter a question of at most 100,000 characters.');const words=terms(query.slice(0,1000));const index=await this.read(workspace.id),matches=[],stale=[];if(!words.length)return {sources:[],stale:[],indexedCount:index.documents.length};
     for(const doc of index.documents){try{const file=await confined(workspace.path,doc.path);if(await this.isAppData(file)){stale.push(doc.path);continue;}const info=await fs.stat(file);if(revision(info)!==doc.revision){stale.push(doc.path);continue;}}catch{stale.push(doc.path);continue;}

@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { McpManager,endpoint,remoteModels } from './integrations.mjs';
 import { Downloads,searchModels,modelFiles } from './hub.mjs';
 import { LocalApi } from './local-api.mjs';
-import { Trainer,trainingEnvironment } from './trainer.mjs';
+import { Trainer,trainingEnvironment,discoverTrainingBases } from './trainer.mjs';
 import { transcribe } from './voice.mjs';
 import { hardware,ggufMetadata,chooseMemoryPlan } from './hardware.mjs';
 import { validateSettings } from './settings.mjs';
@@ -127,8 +127,9 @@ export function createFeatures({ appRoot,store,runtime,agent,models,workspaceByI
       if (route==='/api/local-api/control' && method==='POST') return post(async input => { if (input.action==='start') return localApi.start(store.state.settings.apiHost,store.state.settings.apiPort); if (input.action==='stop') { await localApi.stop(); return localApi.snapshot(); } throw new Error('Unknown API action.'); });
       if (route==='/api/trainer' && method==='GET') { json(res,200,{ ...trainer.snapshot(),loras:adapters.snapshot() }); return true; }
       if (route==='/api/trainer/environment' && method==='GET') { json(res,200,await trainingEnvironment(store.dataDir)); return true; }
-      if (route==='/api/trainer/prepare' && method==='POST') return post(async input => prepareDataset(input.path,store.dataDir,{selectedSpeaker:input.selectedSpeaker}));
-      if (route==='/api/trainer/install' && method==='POST') return post(async () => trainer.install());
+      if (route==='/api/trainer/bases' && method==='GET') { json(res,200,await discoverTrainingBases(store.dataDir,store.state.settings.modelDir)); return true; }
+      if (route==='/api/trainer/prepare' && method==='POST') return post(async input => prepareDataset(input.path,store.dataDir,{selectedSpeaker:input.selectedSpeaker,contextSpeakers:input.contextSpeakers,threadId:input.threadId}));
+      if (route==='/api/trainer/install' && method==='POST') return post(async input => trainer.install(input.device));
       if (route==='/api/trainer/start' && method==='POST') return post(async input => trainer.start(input));
       if (route==='/api/trainer/control' && method==='POST') return post(async input => trainer.control(input.action));
       if (route==='/api/adapters' && method==='GET') { json(res,200,adapters.snapshot()); return true; }
@@ -150,7 +151,7 @@ export function createFeatures({ appRoot,store,runtime,agent,models,workspaceByI
       if (route==='/api/adapters/remove' && method==='POST') return post(async input => { idle(); if (converter.tasks.has(input.id)) await converter.cancel(input.id); const result=await adapters.remove(input.id); if (runtime.status==='ready' && !runtime.remote) await runtime.applyAdapterStack(store.state.loraStack.filter(item => runtime.loadedAdapters?.some(a => a.id===item.id))); return result; });
       if (route==='/api/adapters/import' && method==='POST') return post(async input => { idle(); const base=(await models()).models.find(m => m.path===input.baseGguf); if (!base) throw new Error('Select a GGUF base from your model library. It must be the exact base weights the adapter was trained for.'); return adapters.importGguf(input.path,input.name,base.path); });
       if (route==='/api/adapters/stack' && method==='POST') return post(async input => { idle(); if (['loading','stopping'].includes(runtime.status)) throw new Error('Wait for loading to finish.'); await adapters.stack(input.items); const relevant=runtime.model ? input.items.filter(i => store.state.adapters.find(a => a.id===i.id)?.baseGguf===runtime.model.path) : input.items; return { items:input.items,...await runtime.applyAdapterStack(relevant) }; });
-      if (route==='/api/adapters/convert' && method==='POST') return post(async input => { idle(); const base=(await models()).models.find(m => m.path===input.baseGguf); if (!base) throw new Error('Select the exact GGUF base from your library.'); return converter.start(input.id,base.path); });
+      if (route==='/api/adapters/convert' && method==='POST') return post(async input => { idle(); if(trainer.child)throw new Error('Stop training before converting an adapter.'); if(!['stopped','error'].includes(runtime.status))throw new Error('Unload the model before converting an adapter.'); const base=(await models()).models.find(m => m.path===input.baseGguf); if (!base) throw new Error('Select the exact GGUF base from your library.'); return converter.start(input.id,base.path); });
       if (route==='/api/adapters/cancel-convert' && method==='POST') return post(async input => converter.cancel(input.id));
       if (route==='/api/voice/install' && method==='POST') return post(async () => { if (voiceInstalling) throw new Error('Voice installation is already running.'); voiceInstalling=true; try { const result=await installVoice({ directory:path.join(store.dataDir,'voice-runtime') }); store.state.settings.voiceRuntimePath=result.executable; store.state.settings.voiceModelPath=result.model; await store.save(); return result; } finally { voiceInstalling=false; } });
       if (route==='/api/voice/transcribe' && method==='POST') {

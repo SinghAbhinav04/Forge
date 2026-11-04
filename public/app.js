@@ -5,12 +5,16 @@ import { initKnowledge } from './knowledge.js';
 import { initProjectGit } from './project-git.js';
 import { initProjectInstructions } from './project-instructions.js';
 import { initWebSearch } from './web-search.js';
+import { updateStreamText } from './stream-text.js';
+import { initAttachmentMenu } from './attachment-menu.js';
+import { chatReadiness } from './readiness.js';
 const $ = id => document.getElementById(id);
 const node = (tag, className, text) => { const e = document.createElement(tag); if (className) e.className = className; if (text !== undefined) e.textContent = text; return e; };
 const token = location.hash.slice(1) || sessionStorage.getItem('local-desk-token') || '';
 if (token) { sessionStorage.setItem('local-desk-token', token); history.replaceState(null, '', location.pathname); }
 const state={ data:null,workspaceId:null,sessionId:null,view:'chat',scope:'chat',lastSessions:{chat:null,workspace:null},drafts:new Map(),sessionPrompt:null,navVersion:0,loadingSession:null,run:null,notices:new Map(),folder:'.',file:null,dirty:false,preview:false,sending:false,installing:false,filesVisible:innerWidth>=1000,images:[],documents:[] };
 let searchMatches=null; let searchTicket=0; let searchTimer; let modelRenderKey=''; let historyLimit=100; let streamFrame=0; const streamUpdates=new Map(); let queuedMessage=null; let queueStarting=false; let queueAdding=false; let queuePaused=false;let benchmarkActive=false;
+let fileRequest=0;
 const welcome = $('welcome');
 const setupHint = $('setup-hint');
 const workspaceIntro=node('div'); while(welcome.firstChild) workspaceIntro.append(welcome.firstChild);
@@ -20,6 +24,7 @@ const conversationType=node('span','conversation-type','Chat'); conversationType
 const generationBanner=node('div','generation-banner');generationBanner.id='generation-banner';generationBanner.hidden=true;const generationLabel=node('span');const viewGeneration=node('button','text-button','View reply');viewGeneration.id='view-generating';const stopGeneration=node('button','text-button','Stop');stopGeneration.id='stop-generating';generationBanner.append(generationLabel,viewGeneration,stopGeneration);document.querySelector('.topbar').after(generationBanner);
 const queueBanner=node('div','generation-banner');queueBanner.id='queue-banner';queueBanner.hidden=true;const queueLabel=node('span');const queueNow=node('button','text-button','Send queued');queueNow.type='button';const queueRemove=node('button','text-button','Remove');queueRemove.type='button';queueBanner.append(queueLabel,queueNow,queueRemove);generationBanner.after(queueBanner);
 const queueButton=node('button','secondary-button','Queue message');queueButton.id='queue-message';queueButton.type='button';queueButton.hidden=true;$('send').before(queueButton);
+const readiness=node('div','chat-readiness');readiness.id='chat-readiness';readiness.setAttribute('role','status');readiness.setAttribute('aria-live','polite');$('chat-form').before(readiness);let readinessKey='';
 viewGeneration.onclick=()=>{const id=state.run?.current?.id||state.data?.active;if(id)selectSession(id).catch(fail);};stopGeneration.onclick=()=>$('stop-task').click();
 let features; let journey; let projectGit; let projectInstructions;
 let toastTimer;
@@ -81,7 +86,10 @@ function markdown(text, target) {
 function showView(view) {
   if (['chat','workspace'].includes(view) && view!==state.scope) { void switchConversation(view).catch(fail); return; }
   state.view = view;
-  if(view==='trainer')document.querySelector('.tools-nav').open=true;
+  if (view==='trainer') {
+    document.querySelector('.tools-nav').open=true;
+    void features?.refreshTrainingBases();
+  }
   for (const name of ['workspace','models','settings','trainer']) $(`${name}-view`).hidden=name==='workspace' ? !['chat','workspace'].includes(view) : name!==view;
   document.querySelectorAll('[data-view]').forEach(e => e.classList.toggle('active', e.dataset.view === view));
   $('page-title').textContent=['chat','workspace'].includes(view) ? session()?.title || (state.scope==='chat' ? 'New chat' : 'New workspace session') : view==='models' ? 'Model library' : view==='trainer' ? 'Trainer' : 'Settings';
@@ -137,6 +145,8 @@ function renderSidebar() {
 }
 function renderRuntime() {
   const r = state.data.runtime; const isBusy = busy();
+  const ready=chatReadiness(r,{installed:state.data.runtimeInstalled,hasImages:Boolean(state.images.length || session()?.messages?.some(m=>m.images?.length)),loadingSession:Boolean(state.loadingSession),busy:isBusy});const key=JSON.stringify(ready);
+  if(key!==readinessKey){readinessKey=key;readiness.replaceChildren();const text=node('span');text.append(node('strong','',ready.label));if(ready.detail)text.append(node('small','',ready.detail));readiness.append(text);if(ready.action){const action=node('button','text-button',ready.button);action.type='button';action.onclick=()=>{if(ready.action==='vision')void features.visionSetup().catch(fail);else if(ready.action==='memory'){showView('settings');features.selectSettings('runtime');$('runtime-advanced').open=true;}else showView('models');};readiness.append(action);}}
   document.querySelector('.composer-caption').firstElementChild.textContent=r.localOllama ? 'Ollama on this computer · check whether your model uses the cloud' : r.source==='remote' ? 'Remote model · messages are sent to the configured server' : state.scope==='chat' ? 'Local inference · general conversation' : 'Local inference · writes need your review';
   chatIntro.querySelector('p').textContent=r.localOllama ? 'Ask a question, explore an idea, or just talk. Messages go to Ollama on this computer; check whether your model uses the cloud.' : r.source==='remote' ? 'Ask a question, explore an idea, or just talk. Messages are sent to your configured model server.' : 'Ask a question, explore an idea, or just talk. Your conversation stays on this computer.';
   const name = shortModel(r.model?.name);
@@ -167,6 +177,7 @@ function renderRuntime() {
   if (state.view === 'models') renderModels();
 }
 function renderModels() {
+  if (!state.data) return;
   const signature=JSON.stringify([state.data.models,state.data.runtime.status,state.data.runtime.model?.path,state.data.runtimeInstalled,busy(),state.installing,state.data.modelConversion?.active,state.data.modelPerformance,state.data.modelBenchmarks,benchmarkActive]);
   if(signature===modelRenderKey)return; modelRenderKey=signature;
   $('model-list').replaceChildren();
@@ -214,6 +225,7 @@ function messageElement(message, streaming = false) {
   return wrap;
 }
 function renderMessages(preserveScroll=false) {
+  streamUpdates.clear();if(streamFrame){cancelAnimationFrame(streamFrame);streamFrame=0;}
   const priorHeight=$('messages').scrollHeight,priorTop=$('messages').scrollTop;
   const messages = session()?.messages || [];
   $('messages').replaceChildren(); $('task-notice').hidden = true;
@@ -232,7 +244,7 @@ function renderMessages(preserveScroll=false) {
 function scheduleStreamUpdate(message) {
   streamUpdates.set(message.id,message);if(streamFrame)return;
   streamFrame=requestAnimationFrame(()=>{streamFrame=0;const nearBottom=$('messages').scrollHeight-$('messages').scrollTop-$('messages').clientHeight<160;
-    for(const [id,m] of streamUpdates){const article=document.querySelector(`[data-message-id="${id}"]`);if(!article)continue;article.querySelector('.message-body').textContent=m.content || 'Thinking…';if(m.reasoning){let details=article.querySelector('.reasoning');if(!details){details=node('details','reasoning');details.append(node('summary','','Model reasoning'),node('div'));article.querySelector('.message-body').before(details);}details.querySelector('div').textContent=m.reasoning;}}
+    for(const [id,m] of streamUpdates){if(!visibleRun())continue;const article=document.querySelector(`[data-message-id="${id}"]`);if(!article)continue;updateStreamText(article.querySelector('.message-body'),m.content || 'Thinking…');if(m.reasoning){let details=article.querySelector('.reasoning');if(!details){details=node('details','reasoning');details.append(node('summary','','Model reasoning'),node('div'));article.querySelector('.message-body').before(details);}updateStreamText(details.querySelector('div'),m.reasoning);}}
     streamUpdates.clear();if(nearBottom)scrollToBottom();
   });
 }
@@ -279,8 +291,14 @@ async function refreshFiles() {
   } catch (error) { $('file-list').replaceChildren(node('div', 'empty-sessions', error.message)); }
 }
 async function openFile(path) {
-  if (!clean()) return;
-  try { state.file = await api(`/api/file?workspaceId=${encodeURIComponent(state.workspaceId)}&path=${encodeURIComponent(path)}`); state.dirty = false; state.preview = false; renderEditor(); refreshFiles(); } catch (error) { fail(error); }
+  if (!clean()) return false;
+  const request=++fileRequest,workspaceId=state.workspaceId,navVersion=state.navVersion,priorContent=state.file?.content;
+  try {
+    const file=await api(`/api/file?workspaceId=${encodeURIComponent(workspaceId)}&path=${encodeURIComponent(path)}`);
+    if(request!==fileRequest || workspaceId!==state.workspaceId || navVersion!==state.navVersion)return false;
+    if(state.dirty && state.file?.content!==priorContent){toast('File opening cancelled to preserve your unsaved edits.');return false;}
+    state.file=file;state.dirty=false;state.preview=false;renderEditor();void refreshFiles();return true;
+  } catch(error){if(request===fileRequest && workspaceId===state.workspaceId && navVersion===state.navVersion)fail(error);return false;}
 }
 function renderEditor() {
   const f = state.file;
@@ -294,13 +312,19 @@ function renderEditor() {
 }
 async function saveFile() {
   if (!state.file || !state.dirty || state.file.readOnly) return;
-  try { state.file = await api('/api/file', { method: 'PUT', body: { workspaceId: state.workspaceId, ...state.file } }); state.dirty = false; renderEditor(); await refreshFiles(); toast('Document saved.'); } catch (error) { fail(error); }
+  const workspaceId=state.workspaceId,current=state.file,content=current.content;
+  try {const saved=await api('/api/file',{method:'PUT',body:{workspaceId,...current}});
+    if(workspaceId!==state.workspaceId || state.file!==current)return;
+    if(current.content===content){state.file=saved;state.dirty=false;}else current.hash=saved.hash;
+    renderEditor();await refreshFiles();toast(state.dirty?'Earlier edits saved. Your newer edits are still unsaved.':'Document saved.');
+  }catch(error){fail(error);}
 }
 const settingKeys = ['modelDir', 'runtimePath', 'contextSize', 'gpuLayers', 'threads', 'temperature', 'maxTokens', 'systemPrompt'];
 function fillSettings() { for (const key of settingKeys) $(`setting-${key}`).value = state.data.settings[key]; }
 async function refresh() {
   const previous = state.data;
   state.data = await api('/api/bootstrap');
+  $('app-version').textContent=state.data.appVersion ? ` / ${state.data.appVersion}` : '';
   if(!previous) { try { const [drafts,queue]=await Promise.all([api('/api/drafts'),api('/api/queue')]); state.drafts=new Map(Object.entries(drafts));queuedMessage=queue.message;queuePaused=Boolean(queuedMessage); } catch(error) { fail(error); } }
   if(state.run?.current){const index=state.data.sessions.findIndex(s=>s.id===state.run.current.id);if(index>=0)state.data.sessions[index]=state.run.current;}
   if (!previous && state.data.settings.restoreSession) { const selection=state.data.selection || {}; state.workspaceId=selection.workspaceId; state.scope=selection.view==='workspace' ? 'workspace' : 'chat'; state.view=state.scope; state.lastSessions={chat:selection.chatSessionId || null,workspace:selection.workspaceSessionId || (selection.view!=='chat' ? selection.sessionId : null)}; state.sessionId=state.lastSessions[state.scope]; }
@@ -443,7 +467,7 @@ $('browse-models').onclick = async () => { try { const folder = window.desktop ?
 $('browse-runtime').onclick = async () => { try { const file = window.desktop ? await window.desktop.chooseRuntime() : await askPath('llama-server executable', 'Enter the absolute path to your llama-server executable.', $('setting-runtimePath').value); if (file) $('setting-runtimePath').value = file; } catch (error) { fail(error); } };
 $('settings-form').onsubmit = async e => {
   e.preventDefault(); const values = {};
-  for (const key of settingKeys) { const field = $(`setting-${key}`); values[key] = field.type === 'number' ? Number(field.value) : field.value; }
+  for (const key of settingKeys) { const field = $(`setting-${key}`); if(!e.target.contains(field))continue;values[key] = field.type === 'number' ? Number(field.value) : field.value; }
   try { state.data.settings = await api('/api/settings', { method: 'PATCH', body: values }); await refresh(); $('settings-saved').textContent = 'Saved. Reload the model for hardware changes.'; toast('Settings saved.'); } catch (error) { fail(error); }
 };
 $('install-runtime').onclick = async () => {
@@ -462,6 +486,7 @@ projectGit=initProjectGit({state,api});
 projectInstructions=initProjectInstructions({state,api,fail});
 const openExternal=async value=>{const url=new URL(value);if(!['http:','https:'].includes(url.protocol) || url.username || url.password)throw new Error('Only HTTP(S) links can be opened.');if(window.desktop?.openExternal)await window.desktop.openExternal(url.href);else window.open(url.href,'_blank','noopener,noreferrer');};
 initWebSearch({state,api,saveDraft,features,renderRuntime,fail,openExternal});
+initAttachmentMenu();
 initHelp();
 installFileHistory();
 window.desktop?.onPrepareQuit?.(async()=>{if(state.data){saveDraft();clearTimeout(draftTimer);await flushDrafts();await draftQueue;}});

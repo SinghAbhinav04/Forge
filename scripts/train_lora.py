@@ -63,7 +63,10 @@ def train(config):
     from peft import LoraConfig, TaskType, get_peft_model, PeftModel
     torch.set_num_threads(2)
     torch.manual_seed(42)
-    output = Path(config["output"])
+    requested_output = Path(config["output"])
+    # Both safetensors and the checkpoint marker replace temporary files in
+    # the output directory. Keep those writes on the same physical drive.
+    output = requested_output.resolve() if os.name == "nt" else requested_output
     device = config["device"]
     if device == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("CUDA is unavailable in this training engine")
@@ -126,10 +129,11 @@ def train(config):
         model.save_pretrained(folder)
         tokenizer.save_pretrained(folder)
         torch.save({"step": step, "optimizer": optimizer.state_dict(), "rng": torch.get_rng_state(), "cuda_rng": torch.cuda.get_rng_state_all() if device == "cuda" else None, "mps_rng": torch.mps.get_rng_state() if device == "mps" else None}, folder / "training_state.pt")
+        checkpoint_path = str(requested_output / folder.name)
         marker = output / "latest.tmp"
-        marker.write_text(json.dumps({"path": str(folder), "step": step}))
+        marker.write_text(json.dumps({"path": checkpoint_path, "step": step}))
         os.replace(marker, output / "latest.json")
-        emit("checkpoint", path=str(folder), step=step)
+        emit("checkpoint", path=checkpoint_path, step=step)
     while step < total:
         optimizer.zero_grad(set_to_none=True)
         loss_value = 0

@@ -28,7 +28,7 @@ try {
   await app.evaluate(({ dialog }) => { dialog.showOpenDialog=globalThis.__forgeOriginalDialog; delete globalThis.__forgeOriginalDialog; });
   await page.evaluate(async folder => { await fetch('/api/settings',{ method:'PATCH',headers:{ 'Content-Type':'application/json','X-Local-Desk-Token':sessionStorage.getItem('local-desk-token') },body:JSON.stringify({ modelDir:folder }) }); },originalModels);
   await page.locator('[data-view="settings"]').click();
-  await page.locator('[data-panel="defaults"]').click();
+  await page.locator('[data-panel="defaults"]').evaluate(e=>{const group=e.closest('details');if(group)group.open=true;}); await page.locator('[data-panel="defaults"]').click();
   await page.waitForSelector('#setting-contextSize');
   assert.ok(Number(await page.locator('#setting-contextSize').inputValue()) >= 512);
   await page.locator('[data-view="workspace"]').click();
@@ -52,15 +52,16 @@ try {
   if (process.argv.includes('--inference')) {
     await page.setViewportSize({ width: 1434, height: 921 });
     await page.locator('[data-view="settings"]').click();
-    await page.locator('[data-panel="defaults"]').click();
+    await page.locator('[data-panel="defaults"]').evaluate(e=>{const group=e.closest('details');if(group)group.open=true;}); await page.locator('[data-panel="defaults"]').click();
     await page.locator('#setting-contextSize').fill('2048');
     await page.locator('#setting-maxTokens').fill('512');
-    await page.locator('#setting-gpuLayers').fill('24');
-    await page.locator('#setting-threads').fill('2');
     await page.locator('#setting-temperature').fill('0');
     await page.getByRole('button', { name: 'Save settings', exact: true }).click();
     await page.waitForFunction(() => document.getElementById('settings-saved').textContent.startsWith('Saved.'));
     await page.locator('[data-panel="runtime"]').click();
+    await page.locator('#runtime-advanced > summary').click();
+    await page.locator('#setting-gpuLayers').fill('24');
+    await page.locator('#setting-threads').fill('2');
     await page.locator('#runtime-form [data-setting="kvOnGpu"]').check();
     await page.locator('#runtime-form [data-setting="executionMode"]').selectOption('gpu');
     await page.locator('#runtime-form [data-setting="loadStrategy"]').selectOption('stream');

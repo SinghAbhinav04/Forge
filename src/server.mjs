@@ -18,6 +18,7 @@ import { IdleUnloader } from './idle-unload.mjs';
 import { conversationKind,validateSessionPrompt } from './conversations.mjs';
 
 const APP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const APP_VERSION=JSON.parse(await fs.readFile(path.join(APP_ROOT,'package.json'),'utf8')).version;
 const contentTypes = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml' };
 async function jsonBody(req,limit = 2*1024*1024) {
   if (!req.headers['content-type']?.startsWith('application/json')) throw new Error('Expected application/json.');
@@ -62,7 +63,7 @@ export async function createApplication(options = {}) {
           let executable = ''; try { executable = await runtime.executable(store.state.settings); } catch { /* Setup is optional until loading. */ }
           const { apiKey,connections,mcpServers,sessions,drafts,queuedMessage,...publicState }=store.state;
           let runtimeDevices=null;if(executable)try{runtimeDevices=await runtime.devices(store.state.settings);}catch{}
-          json(res,200,{ ...publicState,sessions:sessions.map(sessionSummary),...features.snapshot(),runtime:runtime.snapshot(),runtimeInstalled:Boolean(executable),runtimeDevices,executable,...(await cachedModels()),hardware:await hardware(),active:agent.active?.sessionId || null }); return;
+          json(res,200,{ ...publicState,appVersion:APP_VERSION,sessions:sessions.map(sessionSummary),...features.snapshot(),runtime:runtime.snapshot(),runtimeInstalled:Boolean(executable),runtimeDevices,executable,...(await cachedModels()),hardware:await hardware(),active:agent.active?.sessionId || null }); return;
         }
         if (route === '/api/runtime' && req.method === 'GET') { json(res, 200, { ...runtime.snapshot(), active: agent.active?.sessionId || null }); return; }
         if (route === '/api/drafts' && req.method === 'GET') { json(res,200,store.state.drafts); return; }
@@ -184,7 +185,7 @@ export async function createApplication(options = {}) {
         }
         json(res, 404, { error: 'API route not found.' }); return;
       }
-      const staticFiles = { '/':'index.html','/app.js':'app.js','/help.js':'help.js','/journey.js':'journey.js','/knowledge.js':'knowledge.js','/project-git.js':'project-git.js','/project-instructions.js':'project-instructions.js','/web-search.js':'web-search.js','/documents.js':'documents.js','/features.js':'features.js','/model-conversion.js':'model-conversion.js','/training-data.js':'training-data.js','/composer.js':'composer.js','/themes.js':'themes.js','/themes.css':'themes.css','/styles.css':'styles.css','/features.css':'features.css','/icon.svg':'icon.svg' };
+      const staticFiles = { '/':'index.html','/app.js':'app.js','/help.js':'help.js','/journey.js':'journey.js','/knowledge.js':'knowledge.js','/project-git.js':'project-git.js','/project-instructions.js':'project-instructions.js','/web-search.js':'web-search.js','/documents.js':'documents.js','/features.js':'features.js','/stream-text.js':'stream-text.js','/attachment-menu.js':'attachment-menu.js','/runtime-controls.js':'runtime-controls.js','/readiness.js':'readiness.js','/lora-use.js':'lora-use.js','/model-conversion.js':'model-conversion.js','/training-data.js':'training-data.js','/composer.js':'composer.js','/themes.js':'themes.js','/themes.css':'themes.css','/styles.css':'styles.css','/features.css':'features.css','/icon.svg':'icon.svg' };
       if (req.method !== 'GET' || !staticFiles[route]) { json(res, 404, { error: 'Not found.' }); return; }
       const file = path.join(APP_ROOT, 'public', staticFiles[route]);
       res.writeHead(200, { 'Content-Type': contentTypes[path.extname(file)], 'Cache-Control': 'no-store' }); res.end(await fs.readFile(file));

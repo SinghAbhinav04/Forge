@@ -1,6 +1,6 @@
 {
   "name": "forge-desktop",
-  "version": "0.4.1",
+  "version": "0.4.6",
   "private": true,
   "description": "Forge: a private desktop workspace for local AI, documents and training",
   "author": {
@@ -35,7 +35,8 @@
     "pack": "electron-builder --dir",
     "dist:win": "electron-builder --win nsis --x64",
     "dist:mac": "electron-builder --mac dmg --arm64 --x64",
-    "dist:linux": "electron-builder --linux AppImage deb --x64 --arm64"
+    "dist:linux": "electron-builder --linux AppImage deb --x64 --arm64",
+    "test:usability": "node scripts/smoke-usability.mjs"
   },
   "build": {
     "appId": "dev.forge.desktop",
@@ -119,7 +120,9 @@
     "@thednp/dommatrix": "^3.1.2",
     "csv-parse": "^7.0.3",
     "mammoth": "^1.13.0",
+    "parse5": "^8.1.0",
     "pdfjs-dist": "^6.4.299",
-    "word-extractor": "^1.0.4"
+    "word-extractor": "^1.0.4",
+    "yauzl": "^3.4.0"
   }
 }

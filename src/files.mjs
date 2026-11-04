@@ -66,7 +66,7 @@ export async function readLines(root,relative,start=1,end=start+99) {
   const info=await fs.stat(target); if(!info.isFile() || info.size>32*1024**2) throw new Error('Choose a text file smaller than 32 MiB.');
   const stream=createReadStream(target,{encoding:'utf8'}); const lines=createInterface({input:stream,crlfDelay:Infinity});
   const selected=[]; let number=0,chars=0,truncated=false;
-  try { for await (const line of lines) { number++; if(line.includes('\0')) throw new Error('Binary files cannot be read as text.'); if(number<start) continue; if(number>end) break; const item=line.slice(0,4000); if(chars+item.length>30000) { truncated=true; break; } selected.push(`${number}: ${item}`); chars+=item.length; } }
+  try { for await (const line of lines) { number++; if(line.includes('\0')) throw new Error('Binary files cannot be read as text.'); if(number<start) continue; if(number>end) break; const item=line.slice(0,4000); if(line.length>item.length)truncated=true; if(chars+item.length>30000) { truncated=true; break; } selected.push(`${number}: ${item}`); chars+=item.length; } }
   finally { lines.close(); stream.destroy(); }
   return {path:relative,startLine:start,endLine:start+selected.length-1,content:selected.join('\n'),truncated};
 }

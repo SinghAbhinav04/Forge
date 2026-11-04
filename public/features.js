@@ -3,9 +3,12 @@ import { initComposer } from './composer.js';
 import { initTrainingData } from './training-data.js';
 import { initModelConversion } from './model-conversion.js';
 import { initDocuments } from './documents.js';
+import { initRuntimeControls } from './runtime-controls.js';
+import { initLoraUse } from './lora-use.js';
 const $=id => document.getElementById(id);
 const make=(tag,className,text) => { const e=document.createElement(tag); if (className) e.className=className; if (text!==undefined) e.textContent=text; return e; };
-let ctx; let composerUI; let documentUI; let datasetUI; let modelConversionUI; let activePanel='general'; let recording; let speechAbort; let pollCount=0; let adapterSignature=''; const namedJobs=new Set();
+let ctx; let composerUI; let documentUI; let datasetUI; let modelConversionUI; let runtimeControls; let loraUse; let activePanel='general'; let recording; let speechAbort; let pollCount=0; let adapterSignature=''; const namedJobs=new Set();
+let checkedTrainingInstall;
 const number=(label,key,min,max,step=1) => `<label>${label}<input type="number" data-setting="${key}" min="${min}" max="${max}" step="${step}"></label>`;
 const toggle=(label,key,help='') => `<label class="toggle-row"><span>${label}<small>${help}</small></span><input type="checkbox" data-setting="${key}"></label>`;
 const save='<button type="submit" class="primary-button">Save changes</button>';
@@ -63,7 +66,7 @@ export function initFeatures(context) {
   const trainerView=make('section','view content-view'); trainerView.id='trainer-view'; trainerView.hidden=true;
   trainerView.innerHTML=`<div class="page-eyebrow">FORGE / LOCAL TRAINING</div><h2>A model, tuned for you.</h2><p class="page-description">Local supervised LoRA fine-tuning. Use a small Hugging Face model folder; GGUF files are inference artifacts and cannot be trained here.</p><div class="runtime-banner"><div><strong id="training-engine-label">Training engine</strong><p id="training-engine-detail">Select Check engine to inspect local Python dependencies.</p></div><div class="action-row"><button id="training-check" class="secondary-button">Check engine</button><button id="training-install" class="secondary-button">Install CPU training engine</button></div></div><form id="training-form" class="feature-form"><label>Local base model folder<div class="input-row"><input id="train-base" required placeholder="Folder with config.json, tokenizer, and safetensors weights"><button id="train-browse-base" class="secondary-button" type="button">Browse</button></div></label><label>JSONL training dataset<div class="input-row"><input id="train-dataset" required placeholder="One {\"text\":\"...\"} or {\"messages\":[...]} object per line"><button id="train-browse-dataset" class="secondary-button" type="button">Browse</button></div></label><label>Training device<select id="train-device"><option value="auto">Automatic · recommended</option><option value="cpu">CPU / RAM</option><option value="cuda">NVIDIA CUDA (requires CUDA-enabled PyTorch)</option><option value="mps">Apple Metal</option></select></label><div class="settings-grid"><label>Epochs<input id="train-epochs" type="number" value="1" min="0.1" max="20" step="0.1"></label><label>Learning rate<input id="train-learningRate" type="number" value="0.0002" min="0.000001" max="0.1" step="0.000001"></label><label>Batch size<input id="train-batchSize" type="number" value="1" min="1" max="4"></label><label>Gradient accumulation<input id="train-gradientAccumulation" type="number" value="4" min="1" max="32"></label><label>Sequence length<input id="train-maxLength" type="number" value="256" min="32" max="2048"></label><label>LoRA rank<input id="train-loraRank" type="number" value="8" min="2" max="64"></label><label>Save every N steps<input id="train-saveEvery" type="number" value="10" min="1" max="1000"></label><label>Maximum training steps<input id="train-maxSteps" type="number" value="100" min="1" max="100000"></label></div><button id="training-start" class="primary-button">Start LoRA training</button></form><p class="feature-note">Unload the inference model before training. The optional engine downloads Python packages into an isolated environment. The CPU build cannot train on CUDA; install a compatible GPU PyTorch build separately if needed. Training saves an adapter and optimizer checkpoints, and never changes the base model. Quality and hardware fit depend on the model and dataset; no model quality evaluation is automatic.</p><div id="training-status" class="feature-note"></div><div class="action-row"><button id="training-pause" class="secondary-button">Pause at checkpoint</button><button id="training-resume" class="secondary-button">Resume checkpoint</button><button id="training-cancel" class="secondary-button">Cancel job</button></div><pre id="training-logs" class="feature-log"></pre>`;
   document.querySelector('main').append(trainerView);
-  const quick=make('div','model-controls'); quick.innerHTML=`<label>Run on<select id="quick-execution"><option value="auto">Automatic · recommended</option><option value="cpu">CPU / RAM</option><option value="gpu">GPU / VRAM</option><option value="hybrid">Hybrid / both</option></select></label><button id="runtime-open" class="text-button">Runtime settings ↗</button><span id="quick-hardware"></span>`; document.querySelector('.library-heading').before(quick);
+  const quick=make('div','model-controls'); quick.innerHTML='<span id="quick-execution-label">Execution: Automatic</span><button id="runtime-open" class="text-button">Runtime settings ↗</button><span id="quick-hardware"></span>'; document.querySelector('.library-heading').before(quick);
   modelConversionUI=initModelConversion(ctx);
   const backend=make('select'); backend.id='runtime-backend'; backend.setAttribute('aria-label','Runtime build to install'); for (const [value,label] of [['auto','Automatic · recommended'],['cpu','CPU / macOS Metal'],['vulkan','Vulkan · GPU + CPU'],['cuda','CUDA · NVIDIA GPU + CPU']]) { const option=make('option','',label); option.value=value; backend.append(option); } const backendDetails=make('details','runtime-build-choice');backendDetails.append(make('summary','','Advanced runtime choice'),backend); $('install-runtime').before(backendDetails); $('install-runtime').textContent='Set up automatically';
   const buildManager=make('div','settings-section'); buildManager.append(make('h3','','Installed runtime builds'),make('div','feature-list')); buildManager.lastChild.id='runtime-build-list'; buildManager.append(button('Refresh installed runtimes',async () => { const builds=await ctx.api('/api/runtime/builds'); const list=$('runtime-build-list'); list.replaceChildren(); for (const build of builds) { const e=row(`${build.tag} · ${build.backend}`,build.executable); e.append(button('Use this runtime',async () => { await ctx.api('/api/runtime/activate',{ method:'POST',body:{ executable:build.executable } }); await ctx.refresh(); })); list.append(e); } if (!builds.length) list.append(make('p','feature-note','No automatic runtime installations found. You can select a custom executable in Advanced / defaults.')); }),button('Install a runtime build',async () => ctx.showView('models'))); panels.runtime.querySelector('.settings-content').append(buildManager);
@@ -85,9 +88,25 @@ export function initFeatures(context) {
   const skillActions=make('div','action-row'); skillActions.append(button('Import skill folder',async () => { const folder=await pick('folder'); if (folder) { await ctx.api('/api/skills/import-folder',{ method:'POST',body:{ path:folder } }); await ctx.refresh(); ctx.toast('Skill imported and enabled. It will be included on the next message.'); } }),button('Refresh skills folder',async () => { await ctx.api('/api/skills/scan',{ method:'POST',body:{} }); await ctx.refresh(); })); $('skill-list').before(skillActions);
   const updateCheck=make('button','secondary-button','Check for updates');updateCheck.type='button';const updateStatus=make('p','feature-note');updateStatus.setAttribute('role','status');$('open-releases').before(updateCheck);$('open-releases').after(updateStatus);updateCheck.onclick=async()=>{updateCheck.disabled=true;updateStatus.textContent='Checking GitHub releases…';try{const result=await ctx.api('/api/update-check',{method:'POST',body:{}});updateStatus.textContent=result.updateAvailable ? `Forge ${result.latest} is available; you have ${result.current}. Open GitHub releases to download it.` : `Forge ${result.current} is up to date with the latest stable release.`;}catch(error){updateStatus.textContent=`Could not check for updates: ${error.message}`;}finally{updateCheck.disabled=false;}};
   datasetUI=initTrainingData(ctx); $('train-dataset').placeholder='Local conversation, document, or structured dataset';
+  const cudaInstall=make('button','secondary-button','Install NVIDIA CUDA engine'); cudaInstall.id='training-install-cuda'; cudaInstall.hidden=true;
+  $('training-install').after(cudaInstall);
+  $('training-status').previousElementSibling.textContent='Unload the inference model before training. CPU and NVIDIA CUDA engines use separate local Python environments. Training saves a LoRA adapter and optimizer checkpoints while keeping the base model intact.';
   $('train-dataset').closest('label').firstChild.textContent='Training source (auto-detected)';
   const trainForm=$('training-form'),sourceLabel=$('train-dataset').closest('label'),baseLabel=$('train-base').closest('label'),review=$('dataset-review');
-  const trainingGrid=trainForm.querySelector('.settings-grid'); trainingGrid.before(sourceLabel,review,baseLabel); sourceLabel.before(make('h3','','1 · Choose your data')); review.before(make('h3','','2 · Review the examples')); baseLabel.before(make('h3','','3 · Choose a base model'));
+  const chatShortcut=button('Open GGUF model library',()=>ctx.showView('models'));
+  chatShortcut.id='trainer-open-models';
+  trainerView.querySelector('.page-description').after(chatShortcut);
+  const chatFolder=make('button','secondary-button','Chat folder'); chatFolder.type='button'; chatFolder.id='train-browse-chat-folder';
+  $('train-browse-dataset').after(chatFolder);
+  const trainingGrid=trainForm.querySelector('.settings-grid'); trainingGrid.before(sourceLabel,review,baseLabel,$('train-device').closest('label')); sourceLabel.before(make('h3','','1 · Choose your data')); review.before(make('h3','','2 · Review the examples')); baseLabel.before(make('h3','','3 · Choose a training base'));
+  const basesLabel=make('label','','Detected training bases');
+  const bases=make('select'); bases.id='training-bases'; basesLabel.append(bases);
+  const baseStatus=make('p','feature-note'); baseStatus.id='training-base-status'; baseStatus.setAttribute('role','status');
+  const rescan=button('Find local training bases',refreshTrainingBases);
+  baseLabel.before(basesLabel,baseStatus,rescan);
+  $('train-browse-base').textContent='Browse for training folder';
+  bases.onchange=()=>{ if (bases.value) $('train-base').value=bases.value; };
+  $('train-base').addEventListener('input',()=>{ bases.value=$('train-base').value; });
   const advancedTraining=make('details','training-advanced'); advancedTraining.append(make('summary','','Advanced training settings')); trainingGrid.before(advancedTraining); advancedTraining.append(trainingGrid); const checkpointLabel=make('label','toggle-row');checkpointLabel.append(make('span','','Use gradient checkpointing'),make('input'));checkpointLabel.lastChild.type='checkbox';checkpointLabel.lastChild.id='train-gradient-checkpoint';advancedTraining.append(checkpointLabel); $('training-start').before(make('h3','','4 · Start training'));
   const library=make('div','settings-section'); library.innerHTML='<h3>Trained LoRA library</h3><p class="feature-note">Completed adapters are kept in the trained folder. PEFT adapters must be converted to GGUF before llama.cpp can apply them. Stacked adapters must use the exact same base weights; matching architecture alone does not guarantee compatibility.</p><code id="trained-folder" class="block-path"></code><div class="action-row"><button id="open-trained-folder" class="secondary-button">Open trained folder</button><button id="import-gguf-lora" class="secondary-button">Import GGUF LoRA</button><button id="apply-lora-stack" class="primary-button">Apply selected stack</button><button id="clear-lora-stack" class="secondary-button">Clear stack</button></div><label>GGUF base for import/conversion<select id="lora-base-model"></select></label><div id="lora-library" class="feature-list"></div>'; trainerView.append(library);
   $('open-trained-folder').onclick=() => window.desktop?.openStorage('trained').catch(ctx.fail);
@@ -98,8 +117,38 @@ export function initFeatures(context) {
   const comparison=make('section','settings-section');comparison.innerHTML='<h3>Compare the base and adapter</h3><p>Load a model with its adapter, then enter up to three test prompts. Forge runs the same prompts with and without the active adapter and restores it afterward.</p><label>Test prompts (one per line)<textarea id="compare-prompts" rows="4" placeholder="Write a short greeting.\nExplain your favorite subject."></textarea></label><div class="action-row"><button type="button" id="compare-run" class="primary-button">Compare responses</button><button type="button" id="compare-cancel" class="secondary-button" hidden>Stop comparison</button></div><p id="compare-status" class="feature-note" role="status"></p><div id="compare-results"></div>';trainerView.append(comparison);
   $('compare-run').onclick=async()=>{const prompts=$('compare-prompts').value.split('\n').map(x=>x.trim()).filter(Boolean);$('compare-run').disabled=true;$('compare-cancel').hidden=false;$('compare-status').textContent='Comparing responses. This can take a while…';$('compare-results').replaceChildren();try{const result=await ctx.api('/api/adapters/compare',{method:'POST',body:{prompts}});for(const item of result.replies){const article=make('article','dataset-sample');article.append(make('h4','',item.prompt));const columns=make('div','dataset-comparison');for(const [title,value] of [['Base model',item.base],['With adapter',item.adapted]]){const col=make('div');col.append(make('h4','',title),make('pre','feature-log',value));columns.append(col);}article.append(columns);$('compare-results').append(article);}$('compare-status').textContent='Comparison complete. The adapter stack has been restored.';}catch(error){$('compare-status').textContent=error.message;}finally{$('compare-run').disabled=false;$('compare-cancel').hidden=true;}};
   $('compare-cancel').onclick=()=>ctx.api('/api/adapters/compare/cancel',{method:'POST',body:{}}).catch(ctx.fail);
+  runtimeControls=initRuntimeControls(ctx,panels.runtime);
+  loraUse=initLoraUse(ctx);
   bind(); selectSettings('general');
-  return { render,selectSettings,tick,applyAppearance,renderImages,renderDocuments:()=>documentUI.render(),renderComposer:()=>composerUI.render(),visionSetup:()=>composerUI.visionSetup() };
+  // Engine controls can be ready while the initial hardware/model scan runs.
+  void ctx.api('/api/trainer').then(renderTrainer).catch(()=>{});
+  return { render,selectSettings,tick,applyAppearance,renderImages,refreshTrainingBases,renderDocuments:()=>documentUI.render(),renderComposer:()=>composerUI.render(),visionSetup:()=>composerUI.visionSetup() };
+}
+let trainingBaseRequest=0;
+async function refreshTrainingBases() {
+  const revision=++trainingBaseRequest;
+  const bases=$('training-bases');
+  const status=$('training-base-status');
+  const field=$('train-base');
+  status.textContent='Looking for local Hugging Face training bases…';
+  try {
+    const models=await ctx.api('/api/trainer/bases');
+    if (revision!==trainingBaseRequest) return;
+    bases.replaceChildren(make('option','','Choose a training base…'));
+    bases.options[0].value='';
+    for (const model of models) {
+      const item=make('option','',`${model.name} · ${(model.bytes/1024**2).toFixed(0)} MiB`);
+      item.value=model.path; bases.append(item);
+    }
+    if (models.length===1 && !field.value) field.value=models[0].path;
+    bases.value=field.value;
+    if (bases.selectedIndex<0) bases.selectedIndex=0;
+    status.textContent=models.length
+      ? 'Forge uses the config, tokenizer, and weights already in the selected folder.'
+      : 'No local training bases found. Browse to a downloaded Hugging Face model folder. For GGUF chat models, open the model library above.';
+  } catch (error) {
+    if (revision===trainingBaseRequest) status.textContent=error.message;
+  }
 }
 export function selectSettings(id) { activePanel=id; const category=document.querySelector(`[data-panel="${id}"]`)?.closest('details'); if(category)category.open=true; document.querySelectorAll('.settings-panel').forEach(p => { p.hidden=p.id!==`panel-${id}`; }); document.querySelectorAll('[data-panel]').forEach(b => b.classList.toggle('active',b.dataset.panel===id)); if (ctx.state.data) render(ctx.state.data); if (id==='developer') refreshDiagnostics().catch(ctx.fail); }
 function applyAppearance(data) {
@@ -114,8 +163,8 @@ function render(data) {
   $('composer-skills').textContent=(data.skills || []).filter(s => s.enabled).length ? `Skills: ${(data.skills || []).filter(s => s.enabled).map(s => s.name).join(', ')}` : '';
   document.querySelectorAll('[data-setting]').forEach(e => { const v=data.settings[e.dataset.setting] ?? fallback[e.dataset.setting]; if (e.type==='checkbox') e.checked=Boolean(v); else if (v!==undefined) e.value=v; });
   $('chat-folder-path').textContent=data.storage?.sessionDir || data.settings.sessionDir;
-  $('quick-execution').value=data.settings.executionMode;
-  for(const id of ['quick-execution','execution-mode']) for(const value of ['gpu','hybrid']) {const option=$(id).querySelector(`option[value="${value}"]`);if(option)option.hidden=Array.isArray(data.runtimeDevices) && !data.runtimeDevices.length && data.settings.executionMode!==value;}
+  for(const value of ['gpu','hybrid']) {const option=$('execution-mode').querySelector(`option[value="${value}"]`);if(option)option.hidden=Array.isArray(data.runtimeDevices) && !data.runtimeDevices.length && data.settings.executionMode!==value;}
+  runtimeControls?.render(data);
   renderRuntime(data);
   const usage=data.usage || []; const input=usage.reduce((a,u) => a+(u.prompt_tokens || 0),0); const output=usage.reduce((a,u) => a+(u.completion_tokens || 0),0);
   $('usage-stats').replaceChildren(stat('Reported input tokens',input.toLocaleString()),stat('Reported output tokens',output.toLocaleString()),stat('Saved sessions',data.sessions.length));
@@ -130,6 +179,7 @@ function render(data) {
 function stat(label,value) { const e=make('div','stat'); e.append(make('small','',label),make('strong','',String(value))); return e; }
 function row(title,description) { const e=make('div','feature-row'); const info=make('div','feature-row-info'); info.append(make('strong','',title),make('small','',description)); e.append(info); return e; }
 function renderRuntime(data) {
+  runtimeControls?.render(data);
   const h=data.hardware; const r=data.runtime;
   $('quick-hardware').textContent=h.gpu ? `${h.gpu.name} · ${h.gpu.totalGiB.toFixed(1)} GiB VRAM` : h.unifiedMemory ? 'Apple unified memory' : 'GPU memory detection unavailable';
   $('memory-meters').replaceChildren(stat('System RAM free / total',`${h.freeGiB?.toFixed(1) ?? '?'} / ${h.ramGiB.toFixed(1)} GiB`),stat(h.unifiedMemory ? 'Apple Silicon' : 'GPU VRAM free / total',h.gpu ? `${h.gpu.freeGiB.toFixed(1)} / ${h.gpu.totalGiB.toFixed(1)} GiB` : h.unifiedMemory ? 'Unified memory' : 'Not detected'));
@@ -145,9 +195,41 @@ function renderDevices(data) { $('device-list').replaceChildren(); for (const c 
 function renderInstances(data) { $('instance-list').replaceChildren(); const r=data.runtime; if (!r.model) { $('instance-list').append(make('p','feature-note','No loaded models. Open Library to load one.')); return; } const e=row(r.model.name,`${r.status} · ${r.source || 'local'} · ${r.plan?.mode || r.model.device || 'runtime'}`); e.append(button(r.status==='loading' ? 'Cancel loading' : 'Unload',async () => { await ctx.api('/api/model/unload',{ method:'POST',body:{} }); await ctx.refresh(); })); $('instance-list').append(e); }
 function renderDownloads(jobs) { $('download-list').replaceChildren(); for (const job of jobs) { const r=row(job.name,`${job.status} · ${(job.received/1024**3).toFixed(2)} / ${(job.bytes/1024**3).toFixed(2)} GiB${job.error ? ` · ${job.error}` : ''}`); const progress=make('progress'); progress.max=job.bytes; progress.value=job.received; r.append(progress); for (const [label,action,valid] of [['Pause','pause',['downloading']],['Resume','resume',['paused','error']],['Cancel','cancel',['downloading','paused','error','verifying']]]) if (valid.includes(job.status)) r.append(button(label,async () => { const result=await ctx.api('/api/downloads/control',{ method:'POST',body:{ id:job.id,action } }); renderDownloads(result); })); $('download-list').append(r); } }
 function renderApi(api) { if (!api) return; $('local-api-status').textContent=api.running ? `Running on ${api.host}:${api.port} · ${api.requests} requests this run` : 'Stopped. Load a model, then start the API.'; $('api-start').disabled=api.running; $('api-stop').disabled=!api.running; $('api-example').textContent=`API base: http://127.0.0.1:${api.port || ctx.state.data.settings.apiPort}/v1\nAuthorization: Bearer <your API key>`; }
-function renderTrainer(value) { if (!value) return; const job=value.job; $('training-status').textContent=job ? `${job.status} · step ${job.step || 0}${job.totalSteps ? ` / ${job.totalSteps}` : ''}${Number.isFinite(job.loss) ? ` · loss ${job.loss.toFixed(4)}` : ''}${job.output ? `\nOutput: ${job.output}` : ''}${job.checkpoint ? `\nCheckpoint: ${job.checkpoint}` : ''}${job.error ? `\n${job.error}` : ''}` : 'No training job. Pause saves a checkpoint after the current optimizer step; cancel stops the process immediately and keeps completed checkpoints.'; $('training-logs').textContent=value.logs?.join('\n') || 'Training logs will appear here.'; const active=['running','pausing','installing','resuming'].includes(job?.status); $('training-start').disabled=active; datasetUI?.setBusy(active); $('training-install').disabled=active; $('training-pause').disabled=job?.status!=='running'; $('training-resume').disabled=!job || !['paused','interrupted','cancelled','error'].includes(job.status); $('training-cancel').disabled=!active; }
+function renderTrainer(value) {
+  if (!value) return;
+  const job=value.job;
+  $('training-status').textContent=job ? `${job.status}${job.config?.device ? ` · ${job.config.device.toUpperCase()}` : ''} · step ${job.step || 0}${job.totalSteps ? ` / ${job.totalSteps}` : ''}${Number.isFinite(job.loss) ? ` · loss ${job.loss.toFixed(4)}` : ''}${job.output ? `\nOutput: ${job.output}` : ''}${job.checkpoint ? `\nCheckpoint: ${job.checkpoint}` : ''}${job.error ? `\n${job.error}` : ''}` : 'No training job. Pause saves a checkpoint after the current optimizer step. Cancel stops the process and keeps completed checkpoints.';
+  $('training-logs').textContent=value.logs?.join('\n') || 'Training logs will appear here.';
+  const active=['running','pausing','installing','resuming'].includes(job?.status);
+  datasetUI?.setBusy(active);
+  $('training-install').disabled=active;
+  $('training-install-cuda').disabled=active;
+  $('training-install-cuda').hidden=!value.canInstallCuda;
+  $('training-pause').disabled=job?.status!=='running';
+  $('training-resume').disabled=!job?.config || !['paused','interrupted','cancelled','error'].includes(job.status);
+  $('training-cancel').disabled=!active;
+  if (job?.status==='installing') {
+    $('training-engine-label').textContent=`Installing ${job.engine==='cuda' ? 'NVIDIA CUDA' : 'CPU'} training engine…`;
+    $('training-engine-detail').textContent=value.logs?.at(-1)?.slice(-300) || 'Preparing the local Python environment.';
+  } else if (job?.engine && checkedTrainingInstall!==job.id) {
+    checkedTrainingInstall=job.id;
+    if (job.status==='installed') void checkTrainingEngine();
+    else {
+      $('training-engine-label').textContent=`${job.engine==='cuda' ? 'NVIDIA CUDA' : 'CPU'} engine setup ${job.status}`;
+      $('training-engine-detail').textContent='See Training logs for details. Check engine to see which devices are ready.';
+    }
+  }
+}
+async function checkTrainingEngine() {
+  try {
+    $('training-engine-detail').textContent='Checking Python environment…';
+    const env=await ctx.api('/api/trainer/environment');
+    $('training-engine-label').textContent=env.installed ? 'Training engine installed' : 'Training engine not installed';
+    $('training-engine-detail').textContent=env.installed ? `PyTorch ${env.torch} · CUDA ${env.cuda ? 'ready' : 'unavailable'} · Metal ${env.mps ? 'ready' : 'unavailable'}\n${env.python}` : 'Choose an engine above. Python 3.10 or later is required.';
+  } catch (error) { ctx.fail(error); }
+}
 function renderAdapters(value) { if (!value) return; $('conversion-status').replaceChildren(); for (const a of value.adapters.filter(a => a.conversion)) { const details=make('details','runtime-logs'); details.append(make('summary','',`${a.name} · conversion ${a.conversion.status}`),make('pre','feature-log',(a.conversion.logs || []).join('\n')+(a.conversion.error ? `\n${a.conversion.error}` : ''))); if (['preparing','converting'].includes(a.conversion.status)) details.append(button('Cancel conversion',async () => { await ctx.api('/api/adapters/cancel-convert',{ method:'POST',body:{ id:a.id } }); await ctx.refresh(); })); $('conversion-status').append(details); } const signature=JSON.stringify([{ ...value,adapters:value.adapters.map(a => ({ ...a,conversion:a.conversion ? { status:a.conversion.status,error:a.conversion.error } : null })) },ctx.state.data.models.map(m => m.path)]); if (signature===adapterSignature || $('lora-library').contains(document.activeElement) && document.activeElement.tagName==='INPUT') return; adapterSignature=signature; $('trained-folder').textContent=value.directory; const selected=$('lora-base-model').value; $('lora-base-model').replaceChildren(); for (const m of ctx.state.data.models) { const option=make('option','',m.name); option.value=m.path; $('lora-base-model').append(option); } if (ctx.state.data.models.some(m => m.path===selected)) $('lora-base-model').value=selected;
-  $('lora-library').replaceChildren(); for (const a of value.adapters) { const r=row(a.name,`${a.ggufPath ? 'GGUF ready' : 'PEFT training output'} · ${a.folder}${a.baseGguf ? `\nBase: ${a.baseGguf}` : ''}`); const enabled=make('input'); enabled.type='checkbox'; enabled.dataset.adapterId=a.id; enabled.setAttribute('aria-label',`Select ${a.name}`); enabled.checked=value.stack.some(i => i.id===a.id); enabled.disabled=!a.ggufPath; const scale=make('input','adapter-scale'); scale.type='number'; scale.min='0'; scale.max='2'; scale.step='.05'; scale.value=value.stack.find(i => i.id===a.id)?.scale ?? 1; scale.dataset.adapterScale=''; scale.setAttribute('aria-label',`Scale ${a.name}`); r.prepend(enabled); r.append(scale,button('Rename',async () => { const name=await ctx.askPath('Name this trained LoRA','The adapter stays in your trained folder.',a.name); if (name) { await ctx.api('/api/adapters/rename',{ method:'POST',body:{ id:a.id,name } }); await ctx.refresh(); } }),button('Remove',async () => { await ctx.api('/api/adapters/remove',{ method:'POST',body:{ id:a.id } }); await ctx.refresh(); ctx.toast('Adapter removed from the library/stack. Files are kept in the trained folder.'); })); if (!a.ggufPath) r.append(button('Convert to GGUF',async () => { const baseGguf=$('lora-base-model').value; if (!baseGguf) throw new Error('Select the exact GGUF base for this adapter first.'); ctx.toast('Preparing the official converter; check the conversion status below.'); await ctx.api('/api/adapters/convert',{ method:'POST',body:{ id:a.id,baseGguf } }); await ctx.refresh(); })); $('lora-library').append(r); }
+  $('lora-library').replaceChildren(); for (const a of value.adapters) { const r=row(a.name,`${a.ggufPath ? 'GGUF ready' : 'PEFT training output'} · ${a.folder}${a.baseGguf ? `\nBase: ${a.baseGguf}` : ''}`); const enabled=make('input'); enabled.type='checkbox'; enabled.dataset.adapterId=a.id; enabled.setAttribute('aria-label',`Select ${a.name}`); enabled.checked=value.stack.some(i => i.id===a.id); enabled.disabled=!a.ggufPath; const scale=make('input','adapter-scale'); scale.type='number'; scale.min='0'; scale.max='2'; scale.step='.05'; scale.value=value.stack.find(i => i.id===a.id)?.scale ?? 1; scale.dataset.adapterScale=''; scale.setAttribute('aria-label',`Scale ${a.name}`); r.prepend(enabled); r.append(button('Use this LoRA',()=>loraUse.open(a),'primary-button'),scale,button('Rename',async () => { const name=await ctx.askPath('Name this trained LoRA','The adapter stays in your trained folder.',a.name); if (name) { await ctx.api('/api/adapters/rename',{ method:'POST',body:{ id:a.id,name } }); await ctx.refresh(); } }),button('Remove',async () => { await ctx.api('/api/adapters/remove',{ method:'POST',body:{ id:a.id } }); await ctx.refresh(); ctx.toast('Adapter removed from the library/stack. Files are kept in the trained folder.'); })); $('lora-library').append(r); }
 }
 async function refreshDiagnostics() { const result=await ctx.api('/api/diagnostics'); $('diagnostics').textContent=JSON.stringify(result,null,2); return result; }
 function renderImages() { composerUI.renderImages(); }
@@ -169,7 +251,6 @@ function bind() {
   $('open-releases').onclick=() => window.desktop ? window.desktop.releasePage().catch(ctx.fail) : ctx.toast('https://github.com/SinghAbhinav04/Forge/releases');
   $('runtime-form').onsubmit=async e => { e.preventDefault(); try { await patch(values(e.target)); } catch (error) { ctx.fail(error); } };
   $('execution-mode').onchange=() => { const mode=$('execution-mode').value; $('execution-help').textContent=mode==='auto' ? 'Forge chooses a safe CPU or GPU setting for the selected runtime.' : mode==='cpu' ? 'Use CPU and system RAM.' : mode==='gpu' ? 'Offload all model layers. Free VRAM must be sufficient.' : 'Split model layers between GPU/VRAM and CPU/RAM.'; };
-  $('quick-execution').onchange=async e => { try { await patch({ executionMode:e.target.value }); } catch (error) { ctx.fail(error); } };
   $('runtime-open').onclick=() => { ctx.showView('settings'); selectSettings('runtime'); };
   $('cancel-load').onclick=async () => { try { await ctx.api('/api/model/unload',{ method:'POST',body:{} }); await ctx.refresh(); } catch (error) { ctx.fail(error); } };
   $('reload-model').onclick=async () => { try { const model=ctx.state.data.runtime.model; await patch(values($('runtime-form'))); await ctx.api('/api/model/unload',{ method:'POST',body:{} }); await ctx.api('/api/model/load',{ method:'POST',body:{ path:model.path } }); await ctx.refresh(); } catch (error) { ctx.fail(error); } };
@@ -193,9 +274,30 @@ function bind() {
   $('voice-wav').onchange=async e => { const file=e.target.files[0]; if (file) { if (file.size>8*1024**2) return ctx.fail(new Error('WAV must be under 8 MiB.')); await transcript(await file.arrayBuffer()); } e.target.value=''; };
   $('voice-cancel-transcription').onclick=() => speechAbort?.abort(); $('voice-use').onclick=() => { $('prompt').value=$('voice-transcript').value; $('prompt').dispatchEvent(new Event('input')); ctx.showView(ctx.state.scope); $('prompt').focus(); };
   $('voice-speak').onclick=() => { const text=ctx.session()?.messages?.filter(m => m.role==='assistant').at(-1)?.content; if (!text) return ctx.fail(new Error('Open a session with an assistant reply first.')); const voice=speechSynthesis.getVoices().find(v => v.localService); if (!voice) return ctx.fail(new Error('No local system speech voice is available. Install one through your OS settings.')); speechSynthesis.cancel(); const utterance=new SpeechSynthesisUtterance(text); utterance.voice=voice; speechSynthesis.speak(utterance); }; $('voice-stop-speaking').onclick=() => speechSynthesis.cancel();
-  $('training-check').onclick=async () => { try { $('training-engine-detail').textContent='Checking Python environment…'; const env=await ctx.api('/api/trainer/environment'); $('training-engine-label').textContent=env.installed ? 'Training engine installed' : 'Training engine not installed'; $('training-engine-detail').textContent=env.installed ? `PyTorch ${env.torch} · CUDA ${env.cuda ? 'available' : 'unavailable'} · Metal ${env.mps ? 'available' : 'unavailable'}\n${env.python}` : 'Install the optional CPU engine, or configure this environment separately. It requires Python 3.10+.'; } catch (error) { ctx.fail(error); } };
-  $('training-install').onclick=async () => { try { renderTrainer(await ctx.api('/api/trainer/install',{ method:'POST',body:{} })); } catch (error) { ctx.fail(error); } };
-  $('train-browse-base').onclick=async () => { try { const value=await pick('folder',$('train-base').value); if (value) $('train-base').value=value; } catch (error) { ctx.fail(error); } }; $('train-browse-dataset').onclick=async () => { try { const value=await pick('dataset',$('train-dataset').value); if (value) { $('train-dataset').value=value; $('train-dataset').dispatchEvent(new Event('input')); } } catch (error) { ctx.fail(error); } };
+  $('training-check').onclick=checkTrainingEngine;
+  for (const [id,device] of [['training-install','cpu'],['training-install-cuda','cuda']]) {
+    $(id).onclick=async () => {
+      $('training-install').disabled=$('training-install-cuda').disabled=true;
+      try { renderTrainer(await ctx.api('/api/trainer/install',{method:'POST',body:{device}})); }
+      catch (error) { $('training-install').disabled=$('training-install-cuda').disabled=false; ctx.fail(error); }
+    };
+  }
+  $('train-browse-base').onclick=async () => {
+    try {
+      const field=$('train-base');
+      const value=await pick('folder',field.value);
+      if (value) { field.value=value; field.dispatchEvent(new Event('input')); }
+    } catch (error) { ctx.fail(error); }
+  };
+  const chooseTrainingSource=kind=>async () => {
+    try {
+      const source=$('train-dataset');
+      const value=await pick(kind,source.value);
+      if (value) { source.value=value; source.dispatchEvent(new Event('input')); }
+    } catch (error) { ctx.fail(error); }
+  };
+  $('train-browse-dataset').onclick=chooseTrainingSource('dataset');
+  $('train-browse-chat-folder').onclick=chooseTrainingSource('folder');
   $('training-form').onsubmit=async e => { e.preventDefault(); try { const body={ ...datasetUI.confirmed(),baseModel:$('train-base').value,dataset:$('train-dataset').value,device:$('train-device').value,gradientCheckpointing:$('train-gradient-checkpoint').checked }; for (const k of ['epochs','learningRate','batchSize','gradientAccumulation','maxLength','loraRank','saveEvery','maxSteps']) body[k]=Number($(`train-${k}`).value); renderTrainer(await ctx.api('/api/trainer/start',{ method:'POST',body })); } catch (error) { ctx.fail(error); } };
   for (const [id,action] of [['training-pause','pause'],['training-resume','resume'],['training-cancel','cancel']]) $(id).onclick=async () => { try { renderTrainer(await ctx.api('/api/trainer/control',{ method:'POST',body:{ action } })); } catch (error) { ctx.fail(error); } };
 }

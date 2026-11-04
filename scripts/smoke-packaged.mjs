@@ -15,11 +15,12 @@ const app = await electron.launch({ executablePath: executable, args: [`--user-d
 try {
   const page = await app.firstWindow(); const errors = []; page.on('pageerror', error => errors.push(error.message));
   await page.waitForFunction(() => document.getElementById('hardware-label')?.textContent.includes('GB RAM'));
+  const version=JSON.parse(await fs.readFile(path.resolve('package.json'),'utf8')).version;assert.equal((await page.locator('#app-version').textContent()).trim(),`/ ${version}`);
   await page.locator('[data-view="workspace"]').click();
   await page.locator('#file-list .file-row').filter({ hasText: 'Welcome.md' }).click();
   await page.waitForFunction(() => document.getElementById('editor').value.includes('Your local workspace'));
   await page.locator('[data-view="settings"]').click();
-  await page.locator('[data-panel="defaults"]').click();
+  await page.locator('[data-panel="defaults"]').evaluate(e=>{const group=e.closest('details');if(group)group.open=true;}); await page.locator('[data-panel="defaults"]').click();
   await page.locator('#setting-contextSize').waitFor();
   assert.ok(Number(await page.locator('#setting-contextSize').inputValue()) >= 512);
   for (const name of ['chat.pdf','chat.docx']) {
@@ -29,6 +30,8 @@ try {
   assert.equal(await app.evaluate(({ app }) => app.getName()),'Forge');
   assert.deepEqual(errors, []);
   await page.screenshot({ path: path.join(output, 'packaged.png') });
+  await page.locator('[data-view="chat"]').click();await page.locator('#attachment-menu-toggle').click();await page.screenshot({path:path.join(output,'forge-composer-menu.png')});await page.keyboard.press('Escape');
+  await page.locator('[data-view="settings"]').click();await page.locator('[data-panel="runtime"]').evaluate(e=>{const group=e.closest('details');if(group)group.open=true;});await page.locator('[data-panel="runtime"]').click();await page.screenshot({path:path.join(output,'forge-runtime-simple.png')});
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close()); assert.equal(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isVisible()),false);
   console.log('Packaged Forge passed: native Windows launch, embedded resources, PDF/Word extraction from the archive, settings and background close.');
 } finally { await app.close(); }

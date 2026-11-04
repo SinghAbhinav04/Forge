@@ -16,7 +16,7 @@ export async function maintenancePreview(store,runtime,trainer,converter){
   }
   let runtimeReady=false;try{await runtime.executable(store.state.settings);runtimeReady=true;}catch{}
   const python=process.platform==='win32'?'Scripts/python.exe':'bin/python';
-  const health={modelFolder:await exists(store.state.settings.modelDir),runtime:runtimeReady,trainingEnvironment:await exists(path.join(data,'training-env',python)),conversionEnvironment:await exists(path.join(data,'conversion-env',python)),trainingActive:activeTraining,conversionActive:Boolean(converter.active)};
+  const health={modelFolder:await exists(store.state.settings.modelDir),runtime:runtimeReady,trainingEnvironment:await exists(path.join(data,'training-env',python)) || await exists(path.join(data,'training-env-cuda','ready')),conversionEnvironment:await exists(path.join(data,'conversion-env',python)),trainingActive:activeTraining,conversionActive:Boolean(converter.active)};
   return {health,items:items.map(({paths,...item})=>item),totalBytes:items.reduce((n,item)=>n+item.bytes,0),_items:items};
 }
 export async function cleanupArtifacts(store,runtime,trainer,converter,selected){

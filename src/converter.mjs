@@ -5,7 +5,7 @@ import os from 'node:os';
 import { spawn } from 'node:child_process';
 import { pipeline } from 'node:stream/promises';
 import { Readable } from 'node:stream';
-import { trainingPython } from './trainer.mjs';
+import { trainingEnvironment,trainingPython } from './trainer.mjs';
 const command=(exe,args,{ signal,log=()=>{},env={},cwd }={}) => new Promise((resolve,reject) => {
   if (signal?.aborted) { reject(signal.reason); return; }
   const child=spawn(exe,args,{ cwd,windowsHide:true,detached:process.platform!=='win32',env:{ ...process.env,OMP_NUM_THREADS:'2',TOKENIZERS_PARALLELISM:'false',...env },stdio:['ignore','pipe','pipe'] });
@@ -41,12 +41,16 @@ export async function ensureConverterSource(dataDir,{ signal,log=console.log }={
 export async function ensureConverter(dataDir,options={}) {
   const source=await ensureConverterSource(dataDir,options);
   const marker=path.join(dataDir,'converter','adapter-helpers.json');
-  try { if (JSON.parse(await fs.readFile(marker,'utf8')).source===source) return source; } catch {}
+  const python=options.python ?? trainingPython(dataDir);
+  try {
+    const previous=JSON.parse(await fs.readFile(marker,'utf8'));
+    if (previous.source===source && (previous.python ?? trainingPython(dataDir,'cpu'))===python) return source;
+  } catch {}
   if (helperTasks.has(marker)) return helperTasks.get(marker);
   const task=(async () => {
     options.log?.('Installing converter helpers into the isolated training environment…');
-    await command(trainingPython(dataDir),['-m','pip','install','sentencepiece','protobuf','tiktoken','gguf'],options);
-    await fs.writeFile(marker,JSON.stringify({ source })); return source;
+    await command(python,['-m','pip','install','sentencepiece','protobuf','tiktoken','gguf'],options);
+    await fs.writeFile(marker,JSON.stringify({ source,python })); return source;
   })(); helperTasks.set(marker,task);
   try { return await task; } finally { helperTasks.delete(marker); }
 }
@@ -54,13 +58,15 @@ export class AdapterConverter {
   constructor(store,library) { this.store=store; this.library=library; this.tasks=new Map(); }
   async start(id,baseGguf) {
     const adapter=this.store.state.adapters.find(a => a.id===id); if (!adapter?.baseModel || !adapter.folder) throw new Error('This PEFT adapter needs its original local Hugging Face base folder.');
-    if (this.tasks.has(id)) throw new Error('This adapter is already converting.'); await fs.access(baseGguf); await fs.access(trainingPython(this.store.dataDir));
+    if (this.tasks.has(id)) throw new Error('This adapter is already converting.'); await fs.access(baseGguf);
+    const env=await trainingEnvironment(this.store.dataDir,'cpu');
+    if (!env.installed) throw new Error('Install a training engine in Trainer before converting a LoRA.');
     const controller=new AbortController(); adapter.conversion={ status:'preparing',logs:[],error:'' }; const log=text => { adapter.conversion.logs=[...adapter.conversion.logs,...text.split(/\r?\n/).filter(Boolean).map(l => l.slice(0,1500))].slice(-40); };
     const task=(async () => {
       try {
-        const source=await ensureConverter(this.store.dataDir,{ signal:controller.signal,log }); controller.signal.throwIfAborted(); adapter.conversion.status='converting';
+        const source=await ensureConverter(this.store.dataDir,{ signal:controller.signal,log,python:env.python }); controller.signal.throwIfAborted(); adapter.conversion.status='converting';
         const outfile=path.join(adapter.folder,'adapter.gguf');
-        await command(trainingPython(this.store.dataDir),[path.join(source,'convert_lora_to_gguf.py'),'--base',adapter.baseModel,'--outfile',outfile,'--outtype','f16',adapter.folder],{ signal:controller.signal,log,env:{ HF_HUB_OFFLINE:'1',TRANSFORMERS_OFFLINE:'1' } });
+        await command(env.python,[path.join(source,'convert_lora_to_gguf.py'),'--base',adapter.baseModel,'--outfile',outfile,'--outtype','f16',adapter.folder],{ signal:controller.signal,log,env:{ HF_HUB_OFFLINE:'1',TRANSFORMERS_OFFLINE:'1' } });
         const { ggufMetadata }=await import('./hardware.mjs'); const actual=await ggufMetadata(outfile); const base=await ggufMetadata(baseGguf); if (actual.kind!=='adapter' || actual.adapterType!=='lora' || actual.architecture!==base.architecture) throw new Error('Converted adapter is incompatible with the selected base GGUF architecture.');
         adapter.ggufPath=outfile; adapter.baseGguf=baseGguf; adapter.format='peft+gguf'; adapter.conversion.status='completed';
       } catch (error) { adapter.conversion.status=controller.signal.aborted ? 'cancelled' : 'error'; adapter.conversion.error=error.message; }

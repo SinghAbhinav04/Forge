@@ -13,7 +13,8 @@ import { createApplication } from '../src/server.mjs';
 import { Agent } from '../src/agent.mjs';
 import { fitContext } from '../src/context.mjs';
 import { runtimeGpuMemory,memoryPlan,recommendedRuntime } from '../src/hardware.mjs';
-import { modelWeightBytes } from '../src/trainer.mjs';
+import { Trainer,discoverTrainingBases,modelWeightBytes } from '../src/trainer.mjs';
+import { prepareDataset } from '../src/datasets.mjs';
 import { diagnostics } from '../src/diagnostics.mjs';
 import { localOllamaModels } from '../src/ollama.mjs';
 import { activityJobs } from '../src/activity.mjs';
@@ -87,6 +88,35 @@ test('model speed is saved only from completed local runtime timing reports',asy
 });
 
 test('training memory preflight counts symlinked Hugging Face weights',async t=>{const {root}=await fixture(t);const model=path.join(root,'snapshot');await fs.mkdir(model);const weights=path.join(root,'weights');await fs.writeFile(weights,Buffer.alloc(1024));try{await fs.symlink(weights,path.join(model,'model.safetensors'));}catch(error){if(process.platform==='win32' && error.code==='EPERM'){t.skip('Windows symlink privileges unavailable');return;}throw error;}assert.equal(await modelWeightBytes(model),1024);});
+
+test('trainer explains why a GGUF library folder cannot be selected as a training base',async t=>{
+ const {root,store}=await fixture(t);
+ const baseModel=path.join(root,'models');await fs.mkdir(baseModel);
+ await fs.writeFile(path.join(baseModel,'chat.gguf'),'GGUF');
+ const dataset=path.join(root,'dataset.txt');await fs.writeFile(dataset,'A sample training document.');
+ const {reviewId}=await prepareDataset(dataset,store.dataDir);
+ const trainer=new Trainer(root,store,{status:'stopped'});
+ await assert.rejects(()=>trainer.start({baseModel,dataset,reviewId,confirmedPreview:true}),/Hugging Face model folder.*GGUF files belong in Models/);
+ await assert.rejects(()=>trainer.install('unknown'),/Choose a CPU or NVIDIA CUDA/);
+ assert.equal(trainer.job,null);
+});
+
+test('trainer finds complete Hugging Face bases beside the GGUF library and skips incomplete downloads',async t=>{
+ const {root,store}=await fixture(t);
+ const modelDir=path.join(root,'models');
+ const complete=path.join(root,'training-models','Small-Instruct');
+ const incomplete=path.join(root,'training-models','Incomplete');
+ for (const directory of [modelDir,complete,incomplete]) await fs.mkdir(directory,{recursive:true});
+ await fs.writeFile(path.join(modelDir,'chat.gguf'),'GGUF');
+ for (const folder of [complete,incomplete]) {
+  await fs.writeFile(path.join(folder,'config.json'),JSON.stringify({architectures:['LlamaForCausalLM']}));
+  await fs.writeFile(path.join(folder,'tokenizer.json'),'{}');
+ }
+ await fs.writeFile(path.join(complete,'model.safetensors'),Buffer.alloc(16));
+ await fs.writeFile(path.join(incomplete,'model-00001-of-00002.safetensors'),Buffer.alloc(16));
+ await fs.writeFile(path.join(incomplete,'model.safetensors.index.json'),JSON.stringify({weight_map:{a:'model-00001-of-00002.safetensors',b:'model-00002-of-00002.safetensors'}}));
+ assert.deepEqual(await discoverTrainingBases(store.dataDir,modelDir),[{path:complete,name:'Small-Instruct',bytes:16}]);
+});
 
 test('context fitting handles long histories and preserves complete tool turns',()=>{
  const messages=[{role:'system',content:'Keep this'},...Array.from({length:600},(_,i)=>[{role:'user',content:`Question ${i} `+'x'.repeat(500)},{role:'assistant',content:`Answer ${i} `+'y'.repeat(500)}]).flat(),{role:'user',content:'Current question'},{role:'assistant',content:'',tool_calls:[{id:'tool-1'}]},{role:'tool',tool_call_id:'tool-1',content:'Result'}];
